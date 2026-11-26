@@ -15,6 +15,8 @@ import { aiTurn, actUnit } from "./ai.js";
 import { createView, touch, drawWorld, drawTokens, drawFx } from "./render.js";
 import { GOALS, currentGoal, claimGoals, nextSteps, topBuilds, topTechs, SPEEDS, fmtSecs } from "./live.js";
 import { createMinimap } from "./minimap.js";
+import { sound } from "./audio.js";
+import { createTutorial, SIMURGH_SVG } from "./tutorial.js";
 
 const SAVE_KEY = "iranciv.game.v1";
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -29,6 +31,7 @@ export function installGame(app) {
   let board = null, g = null, dockEl = null, offs = [], busy = false, showTechs = false, queueMode = false, mini = null;
   // The clock: time runs by itself (speed 1-3) or waits (0). "Turn by turn" brings back the End turn button.
   const PREF_KEY = "iranciv.turnmode";
+  let lastTut = 0;
   let turnMode = false, speed = 0, seasonStart = performance.now(), hudEl = null, steps = [], lastLive = 0, rafId = 0;
   try { turnMode = localStorage.getItem(PREF_KEY) === "1"; } catch { /* no storage */ }
 
@@ -49,35 +52,99 @@ export function installGame(app) {
 
   // --- start screen: choose your people ---------------------------------------------------------------------------
   let startEl = null;
-  function showStart() {
+  // the title-screen horizon: the Zagros, and a city of domes, windcatchers and the columns of an old palace
+  const SKYLINE_SVG = `<svg viewBox="0 0 1600 300" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <path d="M0 170 L120 120 L210 150 L330 80 L430 140 L560 95 L700 150 L820 70 L960 135 L1090 90 L1220 150 L1350 85 L1480 130 L1600 100 V300 H0Z" fill="#203a66"/>
+    <path d="M830 82 L820 70 L808 84Z M1360 96 L1350 85 L1338 98Z M340 92 L330 80 L318 94Z" fill="#e8eef8" opacity=".55"/>
+    <path d="M0 220 C 200 180, 380 215, 560 195 S 900 170, 1100 200 S 1420 185, 1600 205 V300 H0Z" fill="#172c50"/>
+    <g fill="#0d1a33">
+      <rect x="180" y="200" width="14" height="70"/><rect x="176" y="196" width="22" height="7"/><rect x="215" y="206" width="14" height="64"/><rect x="211" y="202" width="22" height="7"/>
+      <rect x="250" y="212" width="14" height="58"/><rect x="246" y="208" width="22" height="7"/><rect x="160" y="262" width="140" height="10"/>
+      <path d="M640 260 V200 C 640 165, 700 150, 712 120 C 724 150, 784 165, 784 200 V260Z"/><rect x="708" y="104" width="8" height="18"/>
+      <rect x="600" y="180" width="12" height="90"/><path d="M596 180 h20 l-10 -16Z"/><rect x="812" y="180" width="12" height="90"/><path d="M808 180 h20 l-10 -16Z"/>
+      <path d="M560 270 V215 h70 v55Z M790 270 V220 h80 v50Z M870 270 V200 h22 v-24 h18 v24 h4 v70Z M520 270 V205 h22 v-22 h18 v22 h6 v65Z"/>
+      <path d="M940 270 V230 C 940 210, 980 200, 985 188 C 990 200, 1030 210, 1030 230 V270Z"/>
+      <path d="M0 300 V262 C 300 250, 600 266, 800 258 S 1300 250, 1600 262 V300Z"/>
+    </g>
+    <path d="M676 260 V222 C 676 208, 712 196, 712 196 C 712 196, 748 208, 748 222 V260Z" fill="#f2c45a" opacity=".22"/>
+  </svg>`;
+  const LEVEL_KEY = "iranciv.level1";
+  const levelDone = () => { try { return localStorage.getItem(LEVEL_KEY) === "1"; } catch { return false; } };
+  function showStart(page = "title") {
     closeStart();
     startEl = document.createElement("div");
     startEl.className = "gm-start";
-    startEl.innerHTML = `<div class="gm-start-card panel" role="dialog" aria-modal="true" aria-label="New game">
-      <div class="gm-start-kicker">3000 BCE · the Iranian plateau</div>
-      <h2>Dawn on the Plateau</h2>
-      <p class="gm-start-lede">Lead a wandering people to found cities on the real land of Iran: its rivers, fertile plains, deserts and mountains.
-        Grow your cities, learn the ideas of three ages, trade with your rivals and leave a lasting mark before 1500 CE.</p>
-      <div class="gm-start-peoples">${PEOPLES.map((p, k) => `<button class="gm-people" data-people="${k}" style="--fc:${p.color}">
+    const peoples = `<div class="gm-start-peoples">${PEOPLES.map((p, k) => `<button class="gm-people" data-people="${k}" style="--fc:${p.color}">
         <span class="gm-crest">${esc(p.name[0])}</span><b>${esc(p.name)}</b><span class="gm-lean">${esc(LEANINGS[p.leaning].title)}</span>
-        <small>${esc(LEANINGS[p.leaning].text)}</small></button>`).join("")}</div>
-      <p class="gm-start-foot muted">The peoples are invented. The other three are led by the computer. Win by Science, Culture or Prosperity.</p>
+        <small>${esc(LEANINGS[p.leaning].text)}</small></button>`).join("")}</div>`;
+    const done = levelDone();
+    startEl.innerHTML = `<div class="gm-start-sky" aria-hidden="true"><div class="gm-sun"></div><div class="gm-hills">${SKYLINE_SVG}</div><div class="gm-fly">${SIMURGH_SVG}</div></div>
+      <div class="gm-start-card panel" role="dialog" aria-modal="true" aria-label="New game">
+      <div class="gm-start-kicker">3000 BCE · the Iranian plateau</div>
+      <h2>Dawn of Cities</h2>
+      <div class="gm-start-rule" aria-hidden="true"></div>
+      ${page === "title" ? `<p class="gm-start-lede">Raise cities by the rivers of the plateau, dig qanats in the desert, plant the four-part gardens and build until 1500 CE.</p>
+      <div class="gm-levels">
+        <button class="gm-level" data-level="1"><span class="gm-level-n">1</span><b>The First City</b><small>The Simurgh shows you how to play. About 3 minutes.</small>${done ? '<span class="gm-level-done">★ done</span>' : '<span class="gm-level-go">Start here</span>'}</button>
+        <button class="gm-level ${done ? "" : "soft"}" data-level="2"><span class="gm-level-n">2</span><b>The Four Houses</b><small>Your people and three rivals race to leave the greatest mark on history.</small><span class="gm-level-go">${done ? "Play" : "Play anyway"}</span></button>
+      </div>` : `<p class="gm-start-lede">Choose your people. The other three are led by the computer.</p>${peoples}
+      <p class="gm-start-foot"><button class="gm-link" data-back="1">◀ Back</button></p>`}
     </div>`;
     startEl.addEventListener("click", (e) => {
+      sound.start();
+      sound.click();
+      const lv = e.target.closest("[data-level]");
+      if (lv) {
+        if (lv.dataset.level === "1") { closeStart(); begin(0, 1); }
+        else showStart("peoples");
+        return;
+      }
+      if (e.target.closest("[data-back]")) { showStart("title"); return; }
       const b = e.target.closest("[data-people]");
       if (!b) return;
       closeStart();
-      begin(+b.dataset.people);
+      begin(+b.dataset.people, 2);
     });
     document.body.appendChild(startEl);
   }
   function closeStart() { startEl?.remove(); startEl = null; }
 
-  function begin(human) {
-    g = newGame(board, { human, quakes: quakes() });
+  function begin(human, level = 2) {
+    g = level === 1 ? newGame(board, { human: 0, peoples: 1, quakes: quakes() }) : newGame(board, { human, quakes: quakes() });
+    g.level = level;
     store.set(save(g));
     show();
-    report([{ text: `Your people, the ${g.factions[human].name}, arrive on the plateau. Found your first city with the Pioneer.` }], "3000 BCE");
+    if (level === 1) startTutorial();
+    else report([{ text: `Your people, the ${g.factions[human].name}, arrive on the plateau. Follow the green button to found your first city.` }], "3000 BCE");
+  }
+
+  // --- level 1: the Simurgh's lesson ---------------------------------------------------------------------------
+  let tut = null;
+  function startTutorial() {
+    tut?.destroy();
+    tut = createTutorial({
+      getCtx: () => ({ g, board, view, speed, settle: settleAdvice(unitsOf(g, g.human).find((u) => u.type === "pioneer")) }),
+      onComplete: levelComplete,
+    });
+    tut.update(true);
+  }
+  function levelComplete() {
+    tut = null;
+    setSpeed(0);
+    try { localStorage.setItem(LEVEL_KEY, "1"); } catch { /* ignore */ }
+    sound.goal();
+    const el = document.createElement("div");
+    el.className = "gm-start gm-win";
+    el.innerHTML = `<div class="gm-start-card panel"><div class="gm-tut-bird big">${SIMURGH_SVG}</div>
+      <div class="gm-stars" aria-label="Three stars"><span>★</span><span>★</span><span>★</span></div>
+      <h2>Level complete</h2><p class="gm-start-lede">Your first city is fed, housed and growing. Now the real age begins: three other houses are settling the plateau too.</p>
+      <div class="gm-levels one"><button class="gm-level" data-next="2"><span class="gm-level-n">2</span><b>The Four Houses</b><small>Found more cities, meet your rivals, and win by Science, Culture or Prosperity.</small><span class="gm-level-go">Play</span></button>
+      <button class="gm-link" data-stay="1">Keep playing this map</button></div></div>`;
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-next]")) { el.remove(); store.clear(); start(true); showStart("peoples"); }
+      else if (e.target.closest("[data-stay]")) el.remove();
+    });
+    document.body.appendChild(el);
   }
 
   function start(fresh = false) {
@@ -94,6 +161,7 @@ export function installGame(app) {
       return;
     }
     show();
+    if (g.level === 1 && !levelDone()) startTutorial();
   }
 
   function show() {
@@ -146,6 +214,7 @@ export function installGame(app) {
     view.settle = settleAdvice(view.sel?.unit);
     view.buy = view.cityView ? buyOptions(g, board, view.cityView) : null;
     celebrateGoals();
+    tut?.update();
     store.set(save(g));
     app.requestDraw();
     render();
@@ -158,8 +227,17 @@ export function installGame(app) {
       const cell = c ? c.cell : unitsOf(g, g.human)[0]?.cell;
       if (cell != null) view.fx.push({ kind: "plop", cell, t0: performance.now(), dur: 2200, text: `✓ ${G.text}  +${G.gold} 🪙`, color: "#b9ec9f", seed: Math.random() * 6, big: true });
       bumpGold();
+      sound.goal();
       touch(view);
     }
+  }
+
+  function banner(html, cls = "") {
+    const el = document.createElement("div");
+    el.className = `gm-banner ${cls}`;
+    el.innerHTML = html;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3600);
   }
 
   function bumpGold() {
@@ -199,11 +277,13 @@ export function installGame(app) {
       }
     }
     setTimeout(bumpGold, 700);
+    sound.coin();
     return n;
   }
 
   function onMapClick(ev) {
     if (app.mode !== "game" || !g) return false;
+    sound.start();
     const cell = ev.cell;
     if (cell == null || cell < 0) return true;
     if (view.cityView) return cityClick(cell);
@@ -342,12 +422,18 @@ export function installGame(app) {
       if (b && Object.keys(c.blds).length > b.blds) {
         const id = Object.keys(c.blds).find((k) => c.blds[k] === g.turn - 1) || Object.keys(c.blds).pop();
         const site = c.sites?.[id] ?? c.cell;
+        if (c.f === g.human) sound.built();
+        if (BUILDINGS[id].wonder) banner(`<span>✦</span><b>${esc(BUILDINGS[id].name)}</b><small>completed by the ${esc(g.factions[c.f].name)} in ${esc(c.name)}</small>`, "wonder");
         view.fx.push({ kind: "plop", cell: site, t0: now, dur: 1800, text: `${BUILDINGS[id].wonder ? "✦ " : ""}${BUILDINGS[id].name} built`, seed: Math.random() * 6, big: !!BUILDINGS[id].wonder, color: c.f === g.human ? "#ffe9a8" : g.factions[c.f].color });
       }
       if (b && c.f === g.human && c.pop > b.pop) view.fx.push({ kind: "float", cell: c.cell, t0: now + 300, dur: 1400, text: "+1 👥", color: "#b9ec9f" });
       if (!b && c.f === g.human) view.fx.push({ kind: "plop", cell: c.cell, t0: now, dur: 1800, text: `${c.name} founded`, seed: 1, big: true });
     }
     const news = g.log.slice(before).filter((e) => e.f === g.human || e.f === -1);
+    if (news.some((e) => /Nowruz/.test(e.text)) && citiesOf(g, g.human).length) {
+      banner(`<span>🌸</span><b>Nowruz Mobarak!</b><small>Happy new year: every city feasts and gains food and culture</small>`, "nowruz");
+      sound.goal();
+    }
     const big = news.filter((e) => IMPORTANT.test(e.text));
     if (turnMode) report(news, yearLabel(g.turn));
     else if (big.length) { report(big, yearLabel(g.turn)); setSpeed(0); }
@@ -377,8 +463,9 @@ export function installGame(app) {
       view.frac = Math.min(1, (now - seasonStart) / SPEEDS[speed]);
       if (view.frac >= 1) advanceSeason();
     }
-    const animating = view.fx.length || view.anim.size || view.cache?.purses?.some((p) => p.full >= 1) || view.stepCell >= 0;
+    const animating = view.fx.length || view.anim.size || view.tutCell >= 0 || view.cache?.purses?.some((p) => p.full >= 1) || view.stepCell >= 0;
     if (now - lastLive > (animating ? 16 : 120)) {
+      if (tut && now - lastTut > 250) { lastTut = now; tut.update(); }
       lastLive = now;
       if (animating || speed > 0) app.requestDraw();
       updateLive();
@@ -438,7 +525,7 @@ export function installGame(app) {
       </div>
       ${pick}
       <div class="gm-hud-bar">
-        <div class="gm-clock"><div class="gm-season" title="${esc(yearLabel(g.turn))}, season ${g.turn + 1} of ${MAX_TURNS}"><i style="--p:${(view.frac * 100).toFixed(1)}"></i><b>${esc(yearLabel(g.turn))}</b></div>${clock}</div>
+        <div class="gm-clock"><button class="gm-clockbtn" data-hud="sound" title="${sound.on ? "Sound off" : "Sound on"}" aria-label="${sound.on ? "Sound off" : "Sound on"}">${sound.on ? "🔊" : "🔇"}</button><div class="gm-season" title="${esc(yearLabel(g.turn))}, season ${g.turn + 1} of ${MAX_TURNS}"><i style="--p:${(view.frac * 100).toFixed(1)}"></i><b>${esc(yearLabel(g.turn))}</b></div>${clock}</div>
         <div class="gm-steps">${steps.slice(0, 3).map(stepBtn).join("")}</div>
       </div>`;
   }
@@ -479,6 +566,9 @@ export function installGame(app) {
   function onHudClick(e) {
     const b = e.target.closest("button");
     if (!b || b.disabled || !g) return;
+    sound.start();
+    sound.click();
+    if (b.dataset.hud === "sound") { sound.toggle(); renderHud(); return; }
     if (b.dataset.step != null) { runStep(steps[+b.dataset.step]); return; }
     if (b.dataset.speed != null) { const k = +b.dataset.speed; if (k) lastSpeed = k; setSpeed(k); return; }
     if (b.dataset.pickTech) { setResearch(g, g.human, b.dataset.pickTech); picking = null; changed(); return; }
@@ -842,7 +932,7 @@ export function installGame(app) {
       case "wake": u.sleep = false; changed(); break;
       case "disband": disband(g, u); view.sel = null; changed(); break;
       case "hurry": hurry(g, c); changed(); break;
-      case "new": store.clear(); start(true); break;
+      case "new": store.clear(); tut?.destroy(); tut = null; start(true); break;
       case "exit": app.setMode(null); break;
     }
   }
@@ -927,6 +1017,9 @@ export function installGame(app) {
       hudEl = null;
       cancelAnimationFrame(rafId);
       setSpeed(0);
+      tut?.destroy();
+      tut = null;
+      sound.stop();
       closeStart();
       view.cityView = null;
       view.placing = null;

@@ -1,7 +1,7 @@
 // Original ancient-era art for the game, drawn with plain canvas shapes (world units: km, hex radius R).
 // Cities are clusters of flat-roofed mud-brick houses that spread as the population grows, with a walled citadel
 // for a capital, city walls once Masonry is known, and the buildings the city has raised (fire temple, garden,
-// observatory, market awnings). Units are drawn as figures in a faction-coloured medallion.
+// observatory, market awnings), windcatchers on the roofs and a domed chahartaq in the square. Units are drawn as figures in a faction-coloured medallion.
 
 function rng(seed) {
   let s = seed >>> 0 || 1;
@@ -27,7 +27,7 @@ function house(ctx, x, y, w, h, tone, px) {
 }
 
 /** A city's footprint radius (km) for population `pop`. */
-export const cityRadius = (R, pop) => R * Math.min(0.92, 0.32 + 0.06 * Math.min(pop, 10));
+export const cityRadius = (R, pop) => R * Math.min(0.92, 0.42 + 0.05 * Math.min(pop, 10));
 
 /** The hex radius to draw a city at so it reads on screen at camera scale `s` (px per km): never smaller than a
  *  footprint of 20 px + 2.5 px per citizen, so cities look like towns, not dots, when the map is zoomed out a bit. */
@@ -71,7 +71,9 @@ export function drawAncientCity(ctx, x, y, R, { pop = 1, color = "#c33", capital
     if (placed >= n) break;
     if (Math.hypot(gx, gy) < core) continue;
     const w = step * (0.6 + rand() * 0.35), h = step * (0.55 + rand() * 0.35);
-    house(ctx, x + gx + (rand() - 0.5) * step * 0.25, y + gy + (rand() - 0.5) * step * 0.25, w, h, ADOBE[(rand() * ADOBE.length) | 0], px);
+    const hx = x + gx + (rand() - 0.5) * step * 0.25, hy = y + gy + (rand() - 0.5) * step * 0.25;
+    house(ctx, hx, hy, w, h, ADOBE[(rand() * ADOBE.length) | 0], px);
+    if (rand() < 0.25) badgir(ctx, hx + w * 0.22, hy - h * 0.15, step * 0.26, px);
     placed++;
   }
   // buildings the city has raised
@@ -110,8 +112,43 @@ export function drawAncientCity(ctx, x, y, R, { pop = 1, color = "#c33", capital
   else {
     ctx.fillStyle = "#e9d6ae";
     ctx.fillRect(x - R * 0.07, y - R * 0.07, R * 0.14, R * 0.14);
+    if (pop >= 3) chahartaq(ctx, x + R * 0.12, y + R * 0.02, R * 0.07, pop >= 6 ? "#3fb7c0" : "#d9c19a", px);
     flag(ctx, x, y - R * 0.02, R * 0.16, color, px);
   }
+}
+
+/** A windcatcher (badgir): a little tower over a house, its vents open to the breeze. */
+function badgir(ctx, x, y, s, px) {
+  ctx.fillStyle = "rgba(60,40,20,0.45)";
+  ctx.fillRect(x - s * 0.5 + s * 0.5, y - s * 1.6 + s * 0.4, s, s * 1.6);
+  ctx.fillStyle = "#e4c896";
+  ctx.fillRect(x - s * 0.5, y - s * 1.6, s, s * 1.6);
+  ctx.strokeStyle = "rgba(90,62,34,0.85)";
+  ctx.lineWidth = px;
+  ctx.strokeRect(x - s * 0.5, y - s * 1.6, s, s * 1.6);
+  ctx.fillStyle = "#6b4a2a";
+  for (let k = 0; k < 3; k++) ctx.fillRect(x - s * 0.38 + k * s * 0.3, y - s * 1.45, s * 0.14, s * 0.55);
+}
+
+/** A chahartaq: four arches under a dome, the old Persian pavilion; the dome turns turquoise as the city grows. */
+function chahartaq(ctx, x, y, s, domeColor, px) {
+  ctx.fillStyle = "#e2cda3";
+  ctx.fillRect(x - s, y - s * 0.5, s * 2, s * 1.3);
+  ctx.strokeStyle = "rgba(90,62,34,0.9)";
+  ctx.lineWidth = px;
+  ctx.strokeRect(x - s, y - s * 0.5, s * 2, s * 1.3);
+  ctx.beginPath();
+  ctx.arc(x, y + s * 0.8, s * 0.42, Math.PI, 0);
+  ctx.fillStyle = "#5a3e22";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - s * 0.85, y - s * 0.5);
+  ctx.bezierCurveTo(x - s * 0.85, y - s * 1.5, x - s * 0.2, y - s * 1.6, x, y - s * 1.9);
+  ctx.bezierCurveTo(x + s * 0.2, y - s * 1.6, x + s * 0.85, y - s * 1.5, x + s * 0.85, y - s * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = domeColor;
+  ctx.fill();
+  ctx.stroke();
 }
 
 function citadel(ctx, x, y, s, color, px) {
@@ -127,6 +164,13 @@ function citadel(ctx, x, y, s, color, px) {
     ctx.lineWidth = px;
     ctx.strokeRect(x - s * w, yy - s * h, s * w * 2, s * h);
     yy -= s * h;
+  }
+  // a hall of columns on the top terrace, like the old palaces of the plateau
+  ctx.fillStyle = "#6b4a2a";
+  for (let r = 0; r < 2; r++) for (let k = 0; k < 4; k++) {
+    ctx.beginPath();
+    ctx.arc(x - s * 0.36 + k * s * 0.24, yy + s * 0.08 + r * s * 0.12, Math.max(px * 0.8, s * 0.035), 0, Math.PI * 2);
+    ctx.fill();
   }
   flag(ctx, x, yy, s * 0.9, color, px);
 }

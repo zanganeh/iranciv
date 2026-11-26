@@ -53,7 +53,7 @@ export function newGame(board, { seed = (Date.now() & 0x7fffffff), peoples = 4, 
   }
   syncBoard(g, board);
   for (const f of g.factions) vision(g, board, f.k);
-  logMsg(g, -1, `${yearLabel(0)}. Four peoples wander the plateau, each looking for a place to settle.`);
+  logMsg(g, -1, starts.length > 1 ? `${yearLabel(0)}. ${["", "One people", "Two peoples", "Three peoples", "Four peoples"][starts.length]} wander the plateau, each looking for a place to settle.` : `${yearLabel(0)}. Your people come down from the mountains, looking for a place to settle.`);
   return g;
 }
 
@@ -960,6 +960,11 @@ export function autoBuild(g, c) {
 // --- events ------------------------------------------------------------------------------------------------------
 
 function events(g, board) {
+  // Nowruz, the new year at the spring equinox: every tenth season the peoples feast. Each city gains food and culture.
+  if (g.turn % 10 === 9) {
+    for (const c of g.cities) { c.food += 4 + c.pop; c.cult += 3; g.factions[c.f].culture += 3; }
+    if (g.cities.length) logMsg(g, -1, "Nowruz! The new year is welcomed with feasts and bonfires: every city gains food and culture.");
+  }
   for (const c of g.cities) {
     // Earthquakes: the hex's real record (M5.5+ within 50 km since 1900) sets the chance of a damaging quake.
     const q = g.quakes?.[c.cell] || 0;

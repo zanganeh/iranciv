@@ -586,6 +586,20 @@ export function drawTokens(ctx, cam, view) {
     ctx.font = `800 ${small ? 9 : 12}px system-ui, sans-serif`;
     ctx.fillText(String(pu.coins), x, y + 1);
   }
+  // the Simurgh's spotlight on a place
+  if (view.tutCell >= 0) {
+    const t = board.tiles[view.tutCell];
+    const x = sx(t.x), y = sy(t.y);
+    const r = Math.max(22, board.grid.R * s * 0.75) * (1 + 0.08 * Math.sin(now / 180));
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "#3fc1c9";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "#3fc1c9";
+    ctx.shadowBlur = 16;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
   // a pointer at whatever the next-step button is about
   if (view.stepCell >= 0 && !view.cityView) {
     const t = board.tiles[view.stepCell];
