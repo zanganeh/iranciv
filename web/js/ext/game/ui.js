@@ -2,7 +2,7 @@
 // victory progress, chronicle), map overlays from render.js, and map clicks that select and move.
 
 import {
-  buildBoard, PEOPLES, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, ERAS, MAX_TURNS, YIELD_INFO, yearLabel, hexDist,
+  buildBoard, PEOPLES, LEANINGS, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, ERAS, MAX_TURNS, YIELD_INFO, yearLabel, hexDist,
 } from "./rules.js";
 import {
   newGame, endTurn, save, load, cityYields, factionTotals, availableTechs, setResearch, buildOptions, setBuild,
@@ -39,13 +39,56 @@ export function installGame(app) {
   }
   const quakes = () => app.data.lenses?.lenses?.find((l) => l.id === "quakes")?.values || null;
 
+  // --- start screen: choose your people ---------------------------------------------------------------------------
+  let startEl = null;
+  function showStart() {
+    closeStart();
+    startEl = document.createElement("div");
+    startEl.className = "gm-start";
+    startEl.innerHTML = `<div class="gm-start-card panel" role="dialog" aria-modal="true" aria-label="New game">
+      <div class="gm-start-kicker">3000 BCE · the Iranian plateau</div>
+      <h2>Dawn on the Plateau</h2>
+      <p class="gm-start-lede">Lead a wandering people to found cities on the real land of Iran: its rivers, fertile plains, deserts and mountains.
+        Grow your cities, learn the ideas of three ages, trade with your rivals and leave a lasting mark before 1500 CE.</p>
+      <div class="gm-start-peoples">${PEOPLES.map((p, k) => `<button class="gm-people" data-people="${k}" style="--fc:${p.color}">
+        <span class="gm-crest">${esc(p.name[0])}</span><b>${esc(p.name)}</b><span class="gm-lean">${esc(LEANINGS[p.leaning].title)}</span>
+        <small>${esc(LEANINGS[p.leaning].text)}</small></button>`).join("")}</div>
+      <p class="gm-start-foot muted">The peoples are invented. The other three are led by the computer. Win by Science, Culture or Prosperity.</p>
+    </div>`;
+    startEl.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-people]");
+      if (!b) return;
+      closeStart();
+      begin(+b.dataset.people);
+    });
+    document.body.appendChild(startEl);
+  }
+  function closeStart() { startEl?.remove(); startEl = null; }
+
+  function begin(human) {
+    g = newGame(board, { human, quakes: quakes() });
+    store.set(save(g));
+    show();
+    report([{ text: `Your people, the ${g.factions[human].name}, arrive on the plateau. Found your first city with the Pioneer.` }], "3000 BCE");
+  }
+
   function start(fresh = false) {
     const saved = fresh ? null : store.get();
     g = null;
     if (saved) {
       try { g = load(saved, board); } catch { g = null; }
     }
-    if (!g) g = newGame(board, { human: 0, quakes: quakes() });
+    if (!g) {
+      view.g = null;
+      if (dockEl) dockEl.innerHTML = `<div class="gm-sec"><p>Choose your people to begin.</p></div>`;
+      app.requestDraw();
+      showStart();
+      return;
+    }
+    show();
+  }
+
+  function show() {
     view.g = g;
     view.board = board;
     view.sel = null;
@@ -54,7 +97,7 @@ export function installGame(app) {
     const mine = unitsOf(g, g.human);
     const c0 = citiesOf(g, g.human)[0];
     const at = c0 ? c0.cell : mine[0]?.cell;
-    if (at != null) app.flyTo(board.tiles[at].x, board.tiles[at].y, Math.max(app.cam.scale, 1.6));
+    if (at != null) app.flyTo(board.tiles[at].x, board.tiles[at].y, Math.max(app.cam.scale, 2.6));
     if (!c0 && mine[0]) select({ unit: mine.find((u) => u.type === "pioneer") || mine[0] });
     render();
   }
@@ -126,11 +169,34 @@ export function installGame(app) {
       for (const u of unitsOf(g, g.human)) if (u.auto && u.moves > 0) actUnit(g, board, u);
       busy = false;
       const news = g.log.slice(before).filter((e) => e.f === g.human || e.f === -1);
-      const big = news.find((e) => /learned|won|age ends|earthquake|Drought|flooded|First contact|embassy|completed the/.test(e.text));
-      if (big) app.ui.toast(big.text);
+      report(news, yearLabel(g.turn));
       if (g.over) store.clear();
       changed();
     }, 30);
+  }
+
+  // --- turn report: what happened while the world moved ----------------------------------------------------------
+  let reportEl = null, reportTimer = 0;
+  const ICON = [[/earthquake/i, "🌋"], [/drought/i, "☀️"], [/flood/i, "🌊"], [/learned/i, "📜"], [/grown/i, "👥"], [/founded/i, "🏛️"],
+    [/trained/i, "⚒️"], [/built/i, "🏗️"], [/completed the/i, "✦"], [/contact|embassy|envoy/i, "🕊️"], [/trade route/i, "🐪"], [/borders/i, "🏺"], [/won|age ends/i, "🏆"]];
+  function report(news, title) {
+    reportEl?.remove();
+    clearTimeout(reportTimer);
+    if (!news.length) return;
+    const order = (e) => (/won|age ends|completed the|learned|earthquake|Drought|flooded|First contact|founded/.test(e.text) ? 0 : 1);
+    const items = [...news].sort((a, b) => order(a) - order(b)).slice(0, 6);
+    reportEl = document.createElement("div");
+    reportEl.className = "gm-report panel";
+    reportEl.innerHTML = `<div class="gm-report-head"><b>${esc(title)}</b><button class="gm-x" aria-label="Close">✕</button></div>
+      <ul>${items.map((e) => `<li${e.cell >= 0 ? ` data-cell="${e.cell}"` : ""}><span>${(ICON.find(([re]) => re.test(e.text)) || [0, "•"])[1]}</span>${esc(e.text)}</li>`).join("")}</ul>
+      ${news.length > items.length ? `<div class="muted gm-small">and ${news.length - items.length} more in the Chronicle</div>` : ""}`;
+    reportEl.addEventListener("click", (e) => {
+      const li = e.target.closest("li[data-cell]");
+      if (li) { const t = board.tiles[+li.dataset.cell]; app.flyTo(t.x, t.y, Math.max(app.cam.scale, 2.4), 500); }
+      if (e.target.closest(".gm-x")) { reportEl.remove(); reportEl = null; }
+    });
+    document.body.appendChild(reportEl);
+    reportTimer = setTimeout(() => { reportEl?.remove(); reportEl = null; }, 9000);
   }
 
   // --- the dock --------------------------------------------------------------------------------------------------
@@ -349,7 +415,7 @@ export function installGame(app) {
   }
 
   function onKey(e) {
-    if (app.mode !== "game" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (app.mode !== "game" || !g || startEl || e.metaKey || e.ctrlKey || e.altKey) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "")) return;
     const k = e.key.toLowerCase();
     if (k === "enter" && !e.target.closest?.("button")) { e.preventDefault(); doEndTurn(); }
@@ -400,6 +466,9 @@ export function installGame(app) {
       offs.forEach((f) => f());
       offs = [];
       playBtn?.classList.remove("active");
+      closeStart();
+      reportEl?.remove();
+      reportEl = null;
       view.g = null;
     },
     onEscape() {

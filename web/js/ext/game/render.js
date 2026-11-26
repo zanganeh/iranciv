@@ -2,7 +2,8 @@
 // cities, units, selection and move range (screen space, on top). They read `view` (set by ui.js).
 
 import { SQRT3, UNITS } from "./rules.js";
-import { visibleSet } from "./game.js";
+import { visibleSet, has } from "./game.js";
+import { drawAncientCity, drawUnitToken, cityRadius, cityDrawR } from "./art.js";
 
 export function createView() {
   return { g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1 };
@@ -123,6 +124,19 @@ export function drawWorld(ctx, cam, view) {
     ctx.lineWidth = Math.max(1.6, 3 * px);
     ctx.stroke(c.edges[f]);
   });
+  // cities, drawn on the land (hidden under the fog where unexplored)
+  if (cam.scale >= 0.9) {
+    const me = g.human >= 0 ? g.factions[g.human] : null;
+    const R = view.board.grid.R;
+    for (const city of g.cities) {
+      if (me && !me.seen[city.cell]) continue;
+      const t = view.board.tiles[city.cell];
+      drawAncientCity(ctx, t.x, t.y, cityDrawR(R, city.pop, cam.scale), {
+        pop: city.pop, color: g.factions[city.f].color, capital: city.capital, walls: has(g, city.f, "masonry"),
+        blds: city.blds, seed: city.id * 7919 + city.cell, px,
+      });
+    }
+  }
   // move range of the selected unit
   if (view.reach && view.reach.size) {
     const p = new Path2D();
@@ -178,26 +192,30 @@ export function drawTokens(ctx, cam, view) {
     const x = sx(t.x), y = sy(t.y);
     if (!onScreen(x, y)) continue;
     const col = g.factions[c.f].color;
-    const r = small ? 5 : 8;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = col;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = sel?.city === c ? "#fff4b0" : "rgba(255,255,255,0.9)";
-    ctx.stroke();
-    if (c.capital) {
-      ctx.fillStyle = "#fff";
-      ctx.font = `bold ${small ? 7 : 10}px system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText("★", x, y + 0.5);
+    let r = cityRadius(cityDrawR(board.grid.R, c.pop, s), c.pop) * s;
+    if (small) {
+      r = 5;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.stroke();
+    }
+    if (sel?.city === c) {
+      ctx.beginPath();
+      ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = "#fff4b0";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
     }
     // banner
     ctx.font = `600 ${small ? 10 : 12}px system-ui, sans-serif`;
     const label = c.name;
     const tw = ctx.measureText(label).width;
     const pw = 18, h = small ? 15 : 18;
-    const bx = x - (tw + pw + 10) / 2, by = y - r - h - 4;
+    const bx = x - (tw + pw + 10) / 2, by = y - r - h - (c.capital && !small ? 14 : 4);
     ctx.fillStyle = "rgba(20,22,28,0.82)";
     roundRect(ctx, bx, by, tw + pw + 10, h, 4);
     ctx.fill();
@@ -210,6 +228,12 @@ export function drawTokens(ctx, cam, view) {
     ctx.textAlign = "left";
     ctx.fillStyle = "#f4efe2";
     ctx.fillText(label, bx + pw + 5, by + h / 2 + 0.5);
+    if (c.capital) {
+      ctx.fillStyle = "#ecd08e";
+      ctx.textAlign = "center";
+      ctx.fillText("★", bx + tw + pw + 13, by + h / 2 + 0.5);
+      ctx.textAlign = "left";
+    }
   }
   // units, grouped by cell
   const byCell = new Map();
@@ -221,28 +245,13 @@ export function drawTokens(ctx, cam, view) {
   ctx.textAlign = "center";
   for (const [cell, list] of byCell) {
     const t = board.tiles[cell];
-    const x0 = sx(t.x), y0 = sy(t.y) + (g.cityAt[cell] >= 0 ? 12 : 0);
+    const c = g.cityAt[cell] >= 0 ? g.cities[g.cityAt[cell]] : null;
+    const r = small ? 8 : 14;
+    const x0 = sx(t.x), y0 = sy(t.y) + (c ? (small ? 10 : cityRadius(cityDrawR(board.grid.R, c.pop, s), c.pop) * s - 6) : 0);
     if (!onScreen(x0, y0)) continue;
     list.forEach((u, k) => {
-      const x = x0 + (k - (list.length - 1) / 2) * (small ? 9 : 15), y = y0;
-      const r = small ? 6 : 10;
-      const isSel = sel?.unit === u;
-      if (isSel) {
-        ctx.beginPath();
-        ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,240,170,0.55)";
-        ctx.fill();
-      }
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = "#1c1e24";
-      ctx.fill();
-      ctx.lineWidth = small ? 2 : 3;
-      ctx.strokeStyle = g.factions[u.f].color;
-      ctx.stroke();
-      ctx.fillStyle = u.f === me && u.moves <= 0 ? "#8b8b8b" : "#fff";
-      ctx.font = `bold ${small ? 8 : 11}px system-ui, sans-serif`;
-      ctx.fillText(UNITS[u.type].letter, x, y + 0.5);
+      const x = x0 + (k - (list.length - 1) / 2) * (2 * r + 3), y = y0;
+      drawUnitToken(ctx, u.type, x, y, r, g.factions[u.f].color, { dim: u.f === me && u.moves <= 0, selected: sel?.unit === u });
     });
   }
 }

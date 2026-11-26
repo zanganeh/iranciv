@@ -6,7 +6,7 @@
 
 import {
   PEOPLES, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, MAX_TURNS, YIELD_KEYS,
-  canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
+  LEANINGS, canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
 } from "./rules.js";
 
 export const WIN = { heritage: 4, culture: 2000, gold: 11000, pop: 100 };
@@ -148,6 +148,8 @@ export function cityYields(g, board, c) {
     food += ty.food;
   }
   y.sci += Math.floor(c.pop / 2); // every two citizens keep one scholar
+  const gift = LEANINGS[g.factions[c.f].leaning]?.yield;
+  if (gift) y[gift] += 1;
   const pct = { food: 0, prod: 0, gold: 0, sci: 0, cult: 0 };
   let growth = 0, routeBonus = 0;
   for (const b of Object.keys(c.blds)) {
@@ -600,7 +602,7 @@ function processCities(g, board, f) {
       c.food -= y.need;
       c.pop++;
       if (c.blds.granary) c.food += Math.floor(y.need * 0.25);
-      if (c.pop % 4 === 0) logMsg(g, f, `${c.name} has grown to ${c.pop} population.`, c.cell);
+      logMsg(g, f, `${c.name} has grown to ${c.pop} population.`, c.cell);
     } else if (c.food < 0) {
       if (c.pop > 1) {
         c.pop--;

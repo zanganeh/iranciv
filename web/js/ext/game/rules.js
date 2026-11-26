@@ -32,13 +32,21 @@ export const yearLabel = (turn) => {
 
 // Invented peoples. Names and colours are original; none stands for a real group.
 export const PEOPLES = [
-  { id: "kavari", name: "Kavari", adj: "Kavari", color: "#d8583c", leaning: "builder", cities: ["Kavar", "Tesh", "Ombal", "Rudan", "Siravel", "Pashto", "Velkar", "Imran", "Dorvi", "Ashal", "Mirreh", "Talun"] },
+  { id: "kavari", name: "Kavari", adj: "Kavari", color: "#d8583c", leaning: "builder", cities: ["Kavar", "Tesh", "Ombal", "Rudan", "Siravel", "Pashvar", "Velkar", "Imran", "Dorvi", "Ashal", "Mirreh", "Talun"] },
   { id: "selenet", name: "Selenet", adj: "Selenet", color: "#3c8fd8", leaning: "trader", cities: ["Selen", "Arvo", "Kesh", "Lomira", "Navesh", "Tirva", "Orsal", "Benu", "Hadrel", "Quessa", "Mavel", "Zorin"] },
   { id: "durvash", name: "Durvash", adj: "Durvash", color: "#5aa64a", leaning: "expander", cities: ["Durva", "Kelm", "Hosran", "Pirak", "Valesh", "Morun", "Sakra", "Elvan", "Garro", "Ishel", "Tumar", "Feyr"] },
   { id: "amarin", name: "Amarin", adj: "Amarin", color: "#c79a2a", leaning: "scholar", cities: ["Amar", "Lisha", "Corvan", "Nedda", "Ruvel", "Ostra", "Pelim", "Yarvo", "Dessa", "Hamir", "Solva", "Kiran"] },
 ];
 
 // --- techs -------------------------------------------------------------------------------------------------------
+// Each people's gift: +1 of one yield in every city they found (rivals have theirs too).
+export const LEANINGS = {
+  builder: { yield: "prod", title: "Builders", text: "Patient masons and smiths. +1 Production in every city." },
+  trader: { yield: "gold", title: "Traders", text: "Caravan people of the salt roads. +1 Gold in every city." },
+  expander: { yield: "food", title: "Settlers", text: "Herders and farmers always moving on. +1 Food in every city." },
+  scholar: { yield: "sci", title: "Scholars", text: "Star-watchers and scribes. +1 Science in every city." },
+};
+
 export const ERAS = ["Ancient", "Classical", "Medieval"];
 export const TECHS = [
   { id: "pottery", name: "Pottery", era: 0, cost: 30, req: [], unlocks: "Granary" },
