@@ -23,6 +23,13 @@ import { initHelp } from "./app/help.js";
 const { drawStatic, drawOverlay, OCEAN_BG } = mapRender;
 
 async function loadJSON(name, optional = false) {
+  // The single-file build (tools/bundle.mjs) inlines every data file here, so it needs no fetch.
+  const inlined = globalThis.__IRANCIV_DATA__;
+  if (inlined) {
+    if (name in inlined) return inlined[name];
+    if (optional) return null;
+    throw new Error(`data/${name}.json is not in this build`);
+  }
   try {
     const r = await fetch(`data/${name}.json`);
     if (!r.ok) throw new Error(`data/${name}.json: HTTP ${r.status}`);
@@ -787,7 +794,7 @@ async function main() {
     beforeCopy: () => url.flush(),
     fileName: () => {
       const sel = shareInfo().selection;
-      return `united-states-${state.lens?.id || "terrain"}${sel ? "-" + slug(sel.name) : ""}.png`;
+      return `iran-${state.lens?.id || "terrain"}${sel ? "-" + slug(sel.name) : ""}.png`;
     },
     onToast: toast,
   });

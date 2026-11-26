@@ -8,7 +8,9 @@
 const MODULES = ["./layers/index.js", "./game/index.js"];
 
 export async function installExtensions(app, list = MODULES) {
-  const loads = list.map((spec) => import(spec).then((m) => ({ m }), (err) => ({ err })));
+  // The single-file build registers its extensions in globalThis.__IRANCIV_EXT__ instead of loading them by path.
+  const pre = globalThis.__IRANCIV_EXT__ || {};
+  const loads = list.map((spec) => (pre[spec] ? Promise.resolve({ m: pre[spec] }) : import(spec).then((m) => ({ m }), (err) => ({ err }))));
   const installed = [];
   for (let k = 0; k < list.length; k++) {
     const spec = list[k];

@@ -24,10 +24,12 @@ export function installGame(app) {
   const view = createView();
   let board = null, g = null, dockEl = null, offs = [], busy = false, showTechs = false;
 
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "css/game.css";
-  document.head.appendChild(link);
+  if (!document.querySelector("style[data-bundled]")) { // the single-file build inlines the styles
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "css/game.css";
+    document.head.appendChild(link);
+  }
 
   async function ensureBoard() {
     if (board) return board;
