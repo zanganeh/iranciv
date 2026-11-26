@@ -29,23 +29,23 @@ export function openStatePanel(idx, ctx) {
             <span class="cr-pop">${popShort(c.population)}</span><span class="cr-go" aria-hidden="true">›</span></button>`;
         })
         .join("")}</div>`
-    : `<p class="muted">No metro or micro areas in this state's data.</p>`;
+    : `<p class="muted">No cities of 30,000+ in this province's data.</p>`;
 
   const hasEcon = st.population != null || st.yields;
   showPanel({
     kind: "state",
     stripe: css(w.stateColor[idx] || [190, 190, 190]),
     title: name,
-    sub: `${esc(abbr)}${geo.fips ? ` · FIPS ${esc(geo.fips)}` : ""}`,
+    sub: `${esc(abbr)}${geo.fips ? ` · ISO IR-${esc(geo.fips)}` : ""}`,
     headExtra: hasEcon ? popLine(st, growthSpan(st, n)) : "",
     sections: [
-      st.yields && { title: "Yields · rank among states", html: `<div class="yield-grid">${yieldGrid(nation, st.yields, st.ranks, count)}</div>` },
-      hasEcon && { title: "Amenities &amp; Housing", html: amenities(st, n) + gdpRow(st) },
-      st.jobs && { title: "Top industries · where people work", html: industries(st, nation, 8) },
+      st.yields && { title: "Yields · rank among provinces", html: `<div class="yield-grid">${yieldGrid(nation, st.yields, st.ranks, count)}</div>` },
+      hasEcon && { title: "Economy", html: (["unemployment", "median_income", "home_value"].some((k) => st[k] != null) ? amenities(st, n) : "") + gdpRow(st) },
+      st.jobs && Object.keys(st.jobs).length && { title: "Top industries · where people work", html: industries(st, nation, 8) },
       { title: "Biggest cities", html: cityRows },
-      !hasEcon && { title: "Data", html: `<p class="muted">State statistics are not in this data build (states.json is missing).</p>` },
+      !hasEcon && { title: "Data", html: `<p class="muted">Province statistics are not in this data build (states.json is missing).</p>` },
     ],
-    foot: `Source: ${esc(nation.vintage)}${nation.gdp_vintage ? `; GDP: ${esc(nation.gdp_vintage)}` : ""}. Ranks are among the ${count} mapped states + DC (1 = largest).`,
+    foot: `Source: ${esc(nation.vintage)}${nation.gdp_vintage ? `; GDP: ${esc(nation.gdp_vintage)}` : ""}. Ranks are among the ${count} provinces (1 = largest).`,
     onClose: ctx.onClose,
     onPedia: ctx.onPedia,
     wire(panel) {

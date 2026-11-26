@@ -24,14 +24,16 @@ export function initPedia(data) {
   const pages = {
     "About this map": () => `
       ${h2("pedia", "📖", "About this map")}
-      <p>This is the real United States, drawn like a strategy game. Nothing is invented: every tile, city and
-      number comes from public data, listed under <i>Sources</i>.</p>
+      <p>This is the real Iran, drawn like a 4X strategy game. Nothing is invented: every tile, city and number comes
+      from public data, listed under <i>Sources</i>. It is a port of Andrej Karpathy's
+      <a href="https://karpathy.ai/usaciv/" target="_blank" rel="noopener">usaciv</a>, which does the same for the United States.</p>
       <h4>How it's built</h4>
-      <p>The lower 48 states are projected (Albers equal-area) and cut into ${data.world.grid.cols}×${data.world.grid.rows}
-      hexes, each ${data.world.grid.radius * 2} km corner to corner. Each hex belongs to the state and county under its centre.
-      Terrain comes from elevation samples inside each hex.</p>
-      <p><b>Cities</b> are the metropolitan and micropolitan areas published in the ACS 1-year estimates (the Census Bureau
-      includes areas of roughly 65,000+ people, so a few now fall slightly below that), placed at their principal city. Their numbers cover the whole metro area, not just the city proper.</p>
+      <p>Iran is projected (Albers equal-area) and cut into ${data.world.grid.cols}×${data.world.grid.rows}
+      hexes, each ${data.world.grid.radius * 2} km corner to corner. Each hex belongs to the province and county
+      (shahrestan) under its centre, from OpenStreetMap outlines. Terrain comes from elevation samples inside each hex.</p>
+      <p><b>Cities</b> are the cities of 30,000 or more people at the 2016 census (via Wikidata), placed at their true
+      position. A city's area on the map is its county when it is the county's largest city. The 2016 census is the latest
+      complete count Iran has published, so populations are from 2016.</p>
       <h4>Controls</h4>
       <p>Drag or arrow keys / WASD to pan · scroll, +/– or double-click to zoom · click a city or a state to open it ·
       / or ⌘K to search · L to cycle lenses · R to show or hide resources · ? for all shortcuts · Esc to close.</p>
@@ -39,22 +41,18 @@ export function initPedia(data) {
       or to download a picture.</p>`,
     Yields: () => `
       ${h2("y-production", "⚙️", "Yields")}
-      <p>Civilization's yields mapped onto real measures. Job-based yields count <i>residents</i> employed in an industry
-      (where workers live, not where they work). <b>Gold is GDP</b>: output per year, counted where the work is done.</p>
-      <table>${data.nation.yields.map((y) => `<tr><td class="ic" style="color:${esc(y.color)}">${glyph(y, 26)}</td><td><b style="color:${esc(y.color)}">${esc(y.label)}${y.key === "gold" ? " (GDP)" : ""}</b><br>${esc(y.description)}</td></tr>`).join("")}</table>
-      <h4>Amenities &amp; housing</h4>
-      <p>Unemployment = unemployed ÷ civilian labour force (B23025). Rent ÷ income = median gross rent × 12 ÷ median household
-      income: a rough affordability signal, not a household-level burden rate.</p>`,
-    States: () => `
-      ${h2("terrain", "🗺️", "States")}
-      <p>Click any land hex without a city to open its state. A state's numbers are the state totals and medians from the
-      same tables as the cities (${esc(data.nation.vintage)}${data.nation.gdp_vintage ? `; GDP from ${esc(data.nation.gdp_vintage)}` : ""}),
-      not the sum of its cities, so rural areas count too.</p>
-      <p><b>Ranks</b> ("#3 of 49") compare the 48 contiguous states and the District of Columbia; 1 is the largest. Alaska,
-      Hawaii and the territories are not mapped yet, so they are not ranked.</p>
-      <p>Metro areas that cross state lines (New York–Newark, Kansas City, Philadelphia…) are listed under every state they
-      touch, with their whole-metro numbers.</p>
-      ${data.states ? "" : `<p class="muted">This data build has no states.json, so state panels show names and cities only.</p>`}`,
+      <p>Strategy-game yields mapped onto real measures. <b>Gold is GDP</b>: each province's share in the Statistical
+      Centre of Iran's provincial accounts times the World Bank's national GDP (2016, current US dollars). Iran publishes no
+      county jobs-by-industry table that this build can reach, so the other yields are mapped quantities, each named below.</p>
+      <table>${data.nation.yields.map((y) => `<tr><td class="ic" style="color:${esc(y.color)}">${glyph(y, 26)}</td><td><b style="color:${esc(y.color)}">${esc(y.label)}${y.key === "gold" ? " (GDP)" : ""}</b><br>${esc(y.description)}</td></tr>`).join("")}</table>`,
+    Provinces: () => `
+      ${h2("terrain", "🗺️", "Provinces")}
+      <p>Click any land hex without a city to open its province. A province's population is its 2016 census total and its
+      GDP its own figure (${data.nation.gdp_vintage ? esc(data.nation.gdp_vintage) : "provincial accounts"}), not the sum of
+      its cities, so rural areas count too. About 1.6% of GDP, mostly offshore oil and gas, belongs to no province.</p>
+      <p><b>Ranks</b> ("#3 of 31") compare the 31 provinces; 1 is the largest.</p>
+      <p>Province growth is 2006 to 2016. Alborz was split from Tehran province in 2010, so it has no 2006 figure.</p>
+      ${data.states ? "" : `<p class="muted">This data build has no states.json, so province panels show names and cities only.</p>`}`,
     Terrain: () => {
       const t = data.w?.tables || resolveTables(data.world.tables);
       const hasCover = Array.isArray(data.world.cover);
@@ -62,7 +60,7 @@ export function initPedia(data) {
         COVER_ICON[x.key] ? icon(COVER_ICON[x.key], "", { size: 15 }) + " " : ""}<b>${esc(x.name)}</b></td><td>${esc(x.rule || "")}</td></tr>`;
       return `
       ${h2("terrain", "🗺️", "Terrain")}
-      <p>Each hex averages the ETOPO1 elevation samples inside it. Relief comes from the mean elevation and roughness
+      <p>Each hex averages the elevation samples (AWS Terrain Tiles: SRTM, GMTED and ETOPO1) inside it. Relief comes from the mean elevation and roughness
       (standard deviation) of those samples; shading comes from elevation differences with neighbouring hexes, lit from the
       north-west.</p>
       <h4>${icon("l-forest", "🌲", { size: 16 })} Land cover</h4>
@@ -77,15 +75,13 @@ export function initPedia(data) {
       <h4>${icon("r-hydro", "💧", { size: 16 })} Water</h4>
       <table>${t.water.filter((x) => x.id > 0).map(row).join("")}</table>
       <h4>Beyond the borders</h4>
-      <p class="muted">Foreign land (Canada, Mexico, and in the Caribbean Cuba and the Bahamas) is drawn under a light fog:
+      <p class="muted">Neighbouring countries (Iraq, Turkey, the Caucasus, Turkmenistan, Afghanistan, Pakistan and the Gulf states) are drawn under a light fog:
       it is shown for context and not mapped in detail.</p>`;
     },
     Lenses: () => `
       ${h2("layers", "▤", "Lenses")}
-      <p>Lenses recolour the map by one measure, built from county data (${esc(data.lenses.vintage)}). Each hex is sampled
-      at 7 points. A county covering some of them is assumed to cover that share of the hex. Small dense counties that no
-      sample hits (Manhattan, Virginia's independent cities) are added to the hex containing their centre. Income and home
-      value are averaged over the counties in a hex, weighted by population.</p>
+      <p>Lenses recolour the map by one measure. County values are spread to hexes: each hex is sampled at 7 points, and a
+      county covering some of them is assumed to cover that share of the hex. Province values colour the whole province.</p>
       <p>The legend shows how many hexes fall at each value. Hover or drag on it to show only that range on the map.</p>
       ${(data.lenses.groups || [{ id: null, name: "" }]).map((g) => {
         const ls = data.lenses.lenses.filter((l) => !g.id || l.group === g.id);
@@ -105,8 +101,8 @@ export function initPedia(data) {
       const cats = [...new Set(r.types.map((t) => t.category || "other"))];
       return `
       ${h2("resources", "⛏️", "Resources")}
-      <p>Resources mark the country's biggest power plants, mines and oil &amp; gas fields on the tiles where they are.
-      Only meaningful sites are shown: each type's threshold is in its description. When zoomed out, a hex shows its
+      <p>Resources mark power plants, mines and oil &amp; gas fields on the tiles where they are. What each type
+      includes is in its description (nuclear plants are left out of this map). When zoomed out, a hex shows its
       highest-ranked resource; zoom in to see more. Press <b>R</b> to show or hide them.</p>
       ${cats.map((c) => `<h4>${esc(CATEGORY[c] || c)}</h4><table class="res-table">
         <tr><th></th><th>Type</th><th>What counts</th><th>Sites</th></tr>

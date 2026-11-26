@@ -23,7 +23,7 @@ export function yieldGrid(nation, yields, ranks = null, rankOf = 0) {
         <div class="ico" style="color:${esc(y.color)}">${glyph(y, 20)}</div>
         <div class="val" style="color:${esc(y.color)}">${yieldValue(y, v)}</div>
         <div class="lbl">${esc(label)}</div>
-        ${r ? `<div class="rank" title="Rank among the ${rankOf} mapped states (1 = largest)">#${r} of ${rankOf}</div>` : ""}</div>`;
+        ${r ? `<div class="rank" title="Rank among the ${rankOf} provinces (1 = largest)">#${r} of ${rankOf}</div>` : ""}</div>`;
     })
     .join("");
 }
@@ -89,15 +89,15 @@ export function growthSpan(o, n = null) {
   const yrs = Array.isArray(o.growth_years) && o.growth_years.length === 2 ? o.growth_years : null;
   const p = (g) => `${g >= 0 ? "+" : "−"}${Math.abs(g * 100).toFixed(1)}%`;
   const period = yrs ? `${yrs[0]}–${yrs[1]}` : "the last few years";
-  const us = Number.isFinite(n?.growth) ? ` (U.S. ${p(n.growth)})` : "";
-  const tip = `Population change ${period}, Census population estimates: ${p(o.growth)}${us}`;
+  const us = Number.isFinite(n?.growth) ? ` (Iran ${p(n.growth)})` : "";
+  const tip = `Population change ${period}, censuses: ${p(o.growth)}${us}`;
   const cls = o.growth >= 0 ? "good" : "bad";
   return ` · <span class="growth ${cls}" title="${esc(tip)}">${o.growth >= 0 ? "▲" : "▼"} ${Math.abs(o.growth * 100).toFixed(1)}%${
     yrs ? ` <span class="since">since ${yrs[0]}</span>` : ""}</span>`;
 }
 
 export const popLine = (o, extra = "") =>
-  `<div class="cp-pop">${icon("pop", "👥", { size: 16 })} <b>${int(o.population)}</b> people · ${int(o.employed)} employed${extra}</div>`;
+  `<div class="cp-pop">${icon("pop", "👥", { size: 16 })} <b>${int(o.population)}</b> people${o.employed != null ? ` · ${int(o.employed)} employed` : ""}${extra}</div>`;
 
 /**
  * Fill and show the panel.
@@ -106,13 +106,13 @@ export const popLine = (o, extra = "") =>
 export function showPanel(spec) {
   const panel = panelEl();
   panel.dataset.kind = spec.kind;
-  panel.setAttribute("aria-label", `${spec.kind === "state" ? "State" : "City"}: ${spec.title}`);
+  panel.setAttribute("aria-label", `${spec.kind === "state" ? "Province" : "City"}: ${spec.title}`);
   panel.innerHTML = `
     <div class="sheet-grip" aria-hidden="true"></div>
     <div class="cp-head">
       <div class="stripe" style="background:${spec.stripe}"></div>
       <button class="icon-btn cp-close" aria-label="Close panel (Esc)" title="Close (Esc)">${icon("close", "✕", { size: 13 })}</button>
-      <div class="cp-kind">${spec.kind === "state" ? "State" : "City"}</div>
+      <div class="cp-kind">${spec.kind === "state" ? "Province" : "City"}</div>
       <h2 class="cp-name">${spec.titleHtml ?? esc(spec.title)}</h2>
       ${spec.sub ? `<div class="cp-full">${spec.sub}</div>` : ""}
       ${spec.headExtra || ""}

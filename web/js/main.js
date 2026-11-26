@@ -35,7 +35,7 @@ async function loadJSON(name, optional = false) {
 
 // Optional data files (docs/DATA_CONTRACTS.md). Small map-layer files are fetched right after the first frame; the
 // others only when something asks for them (app.loadData(name)). A missing file (404) loads as null.
-const EAGER_DATA = ["infrastructure", "military", "wonders", "trade"];
+const EAGER_DATA = ["infrastructure", "wonders"]; // the Iran build has no military or trade layer
 const DATA_NAME = /^[a-z0-9_-]+$/;
 
 // render/snapshot.js draws a whole view into any canvas; optional, with a local fallback.
@@ -533,7 +533,7 @@ async function main() {
   const stateName = (idx) => states?.[idx]?.name || w.raw.states[idx]?.name || "State";
 
   function describeCanvas() {
-    const parts = ["Hex map of the contiguous United States", state.lens ? `coloured by the ${state.lens.name} lens` : "showing terrain"];
+    const parts = ["Hex map of Iran", state.lens ? `coloured by the ${state.lens.name} lens` : "showing terrain"];
     if (state.selectedCity) parts.push(`${state.selectedCity.name} selected`);
     else if (state.selectedState != null) parts.push(`${stateName(state.selectedState)} selected`);
     canvas.setAttribute("aria-label", parts.join(", "));

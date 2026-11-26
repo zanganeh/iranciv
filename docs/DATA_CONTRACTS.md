@@ -5,6 +5,18 @@ both sides. All coordinates are **map km**: Albers equal-area, origin top-left, 
 Per-cell arrays have length `grid.cols * grid.rows`, with index `row * cols + col` (pointy-top, odd-r layout, see
 `pipeline/core/hexgrid.py` ⇄ `web/js/hex.js`). `null` always means "no data". Never write `0` as a stand-in for "unknown".
 
+
+> **Iran build.** This file is usaciv's contract and still uses its US wording; the shapes are unchanged. In this
+> build: "states" are Iran's 31 provinces (`fips` = the number of the ISO 3166-2 code, `IR-10` → `"10"`; `abbr` from
+> en.wikipedia "Provinces of Iran"); "counties" are the 478 shahrestan, `geoid` = province code + a 3-digit index by
+> English name (not an official code); city `id` is the city's Wikidata QID, `counties` is the one county it sits in and
+> `footprint` that county's hexes when it is the county's largest city. Population is the 2016 census and
+> `growth_years` is `[2006, 2016]` (|growth| above 60% is nulled). Yield units are `km²` (food), `MW` (production),
+> `usd` (gold), `universities` and `sites`; `jobs` and the housing fields are empty or null. Resources use units
+> `MW`, `field` and `mine`. `military.json`, `trade.json`, `citizens.json`, `districts.json` and `disasters.json` are
+> not built. Builders: `world`, `economy` (cities, states, nation, counties), `lenses`, `sites` (resources, wonders),
+> `infrastructure`, `catalog`.
+
 ## Pipeline conventions
 
 * **Sources** (`pipeline/sources/*.py`) are discovered automatically: any `Source` subclass with `info = SourceInfo(...)`.

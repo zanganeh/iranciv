@@ -18,7 +18,7 @@ function usd(n) {
   return `$${int(n)}`;
 }
 
-const HUB_NAME = { L: "Large hub", M: "Medium hub", S: "Small hub", N: "Nonhub primary airport" };
+const HUB_NAME = { L: "Large airport", M: "Medium airport" };
 const PORT_TYPE = { coastal: "Coastal port", great_lakes: "Great Lakes port", inland: "Inland river port" };
 
 export const tips = {
@@ -26,11 +26,11 @@ export const tips = {
     const yr = p.year ?? "";
     const lines = [
       `<b>${esc(p.name)}</b> ${muted(`${esc(PORT_TYPE[p.type] || "Port")}, ${esc(p.state || "")}`)}`,
-      `#${esc(p.rank)} by tonnage · <b>${num(p.tons)}</b> short tons (${esc(yr)})`,
     ];
+    if (p.tons != null) lines.push(`#${esc(p.rank)} by tonnage · <b>${num(p.tons)}</b> short tons (${esc(yr)})`);
     if (p.foreign != null || p.domestic != null) lines.push(`Foreign ${num(p.foreign)} · domestic ${num(p.domestic)}`);
     if (p.imports != null || p.exports != null) lines.push(`Imports ${num(p.imports)} · exports ${num(p.exports)}`);
-    lines.push(muted("USACE principal ports; placed at the port area's centre (long river ports are approximate)."));
+    lines.push(muted("Natural Earth 1:10m ports."));
     return lines.join("<br>");
   },
   airport(a) {
@@ -45,7 +45,7 @@ export const tips = {
       lines.push(`<b>${num(a.enplanements)}</b> boardings in ${esc(a.year)}${ch}`);
     }
     if (a.cargo_lbs != null) lines.push(`All-cargo landed weight ${num(a.cargo_lbs)} lb`);
-    lines.push(muted("FAA CY enplanements and all-cargo data."));
+    lines.push(muted("OurAirports: large and medium airports with scheduled service."));
     return lines.join("<br>");
   },
   fort(f, m) {
@@ -75,15 +75,19 @@ export const tips = {
     const mt = x.metrics || {};
     const lines = [`<b>${esc(x.name)}</b> ${muted(esc([x.state].filter(Boolean).join("")))}`];
     if (x.kind === "university") {
-      lines.push(`${esc(k)} · #${esc(x.rank)} by research spending`);
+      lines.push(`${esc(k)} · #${esc(x.rank)} by Wikipedia languages`);
+      if (mt.wikipedia_languages != null) lines.push(`Wikipedia articles in ${int(mt.wikipedia_languages)} languages`);
       if (mt.rd_usd != null) lines.push(`R&amp;D ${usd(mt.rd_usd)} (FY${esc(mt.year)})${mt.federal_usd != null ? `, ${pct(mt.federal_usd / mt.rd_usd, 0)} federal` : ""}`);
-      if (mt.enrollment != null) lines.push(`${int(mt.enrollment)} students (12-month headcount, ${esc(mt.enrollment_year)})`);
+      if (mt.enrollment != null) lines.push(`${int(mt.enrollment)} students (Wikidata)`);
+    } else if (x.rule === "landmark") {
+      lines.push(`UNESCO World Heritage${mt.inscribed ? `, inscribed ${esc(mt.inscribed)}` : ""}`);
+      if (mt.parts?.length) lines.push(muted(`Includes ${esc(mt.parts.slice(0, 4).join(", "))}${mt.parts.length > 4 ? "…" : ""}`));
     } else if (x.curated) {
       lines.push(`${esc(k)} · hand-picked (curated, not ranked by data)`);
       if (mt.visits != null) lines.push(`${num(mt.visits)} recreation visits (${esc(mt.year)})`);
       if (mt.designated) lines.push(`National Historic Landmark since ${esc(mt.designated)}`);
     } else {
-      lines.push(`${esc(k)} · #${esc(x.rank)} by visits${mt.unit_type ? ` among ${esc(mt.unit_type === "National Park" ? "National Parks" : "other park units")}` : ""}`);
+      lines.push(`${esc(k)} · #${esc(x.rank)} by area among national parks`);
       if (mt.visits != null) lines.push(`<b>${num(mt.visits)}</b> recreation visits (${esc(mt.year)})${mt.visits_of ? ` ${muted(`(${esc(mt.visits_of)})`)}` : ""}`);
       if (mt.area_km2 != null) lines.push(`${int(mt.area_km2)} km²`);
     }

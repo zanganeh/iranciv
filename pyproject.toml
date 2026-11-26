@@ -1,7 +1,7 @@
 [project]
-name = "usaciv"
+name = "iranciv"
 version = "0.1.0"
-description = "A Civilization-style visualizer of the real United States"
+description = "A 4X-strategy-style visualizer of the real Iran (a port of usaciv)"
 requires-python = ">=3.11"
 dependencies = []  # standard library only, on purpose
 

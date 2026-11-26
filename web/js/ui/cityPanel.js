@@ -6,6 +6,8 @@ import { yieldGrid, amenities, industries, gdpRow, popLine, growthSpan, showPane
 /**
  * ctx: {w, nation, onClose, onPedia, onState(stateIndex)}
  */
+const hasHousing = (o) => ["unemployment", "median_income", "home_value", "median_rent", "rent_burden"].some((k) => o[k] != null);
+
 export function openCityPanel(city, ctx) {
   const { w, nation } = ctx;
   const n = nation.nation;
@@ -31,11 +33,11 @@ export function openCityPanel(city, ctx) {
     headExtra: popLine(city, growth),
     sections: [
       { title: "Yields", html: `<div class="yield-grid">${yieldGrid(nation, city.yields)}</div>` },
-      { title: "Amenities &amp; Housing", html: amenities(city, n) + gdpRow(city) },
-      { title: "Districts · where people work", html: industries(city, nation) },
-    ],
-    foot: `Source: ${esc(nation.vintage)} (tables C24030, B19025, B19013, B25064, B25077, B23025)${nation.gdp_vintage ? `; GDP: ${esc(nation.gdp_vintage)}` : ""}.
-      Green ×N = this industry's share of jobs is N× the U.S. share.`,
+      hasHousing(city) ? { title: "Amenities &amp; Housing", html: amenities(city, n) + gdpRow(city) }
+        : { title: "Economy", html: gdpRow(city) },
+      Object.keys(city.jobs || {}).length && { title: "Districts · where people work", html: industries(city, nation) },
+    ].filter(Boolean),
+    foot: `Source: ${esc(nation.vintage)}${nation.gdp_vintage ? `; GDP: ${esc(nation.gdp_vintage)}, split by population share (an estimate)` : ""}.`,
     onClose: ctx.onClose,
     onPedia: ctx.onPedia,
     wire(panel) {

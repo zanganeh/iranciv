@@ -4,8 +4,8 @@ import { icon } from "../ui/icon.js";
 
 // The address printed on shared images. Set it to the published site (e.g. "example.com/us-atlas"); when left
 // empty, the page's own host and path are used, except on a local dev server, where SITE_FALLBACK is printed.
-export const SITE_URL = "karpathy.ai/usaciv";
-const SITE_FALLBACK = "usaciv";
+export const SITE_URL = "iranciv";
+const SITE_FALLBACK = "iranciv";
 
 export function siteLabel() {
   if (SITE_URL) return SITE_URL;
@@ -25,7 +25,7 @@ export const IMG_H = 900;
 export const CAPTION_H = 118;
 const SERIF = '"Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif';
 const SANS = '-apple-system, "Segoe UI", system-ui, sans-serif';
-const CREDIT = "Data: Census ACS, BEA, NOAA, USGS/MRLC, EIA, Natural Earth";
+const CREDIT = "Data: SCI census & accounts via Wikidata, World Bank, ESA WorldCover, USGS, WRI, OSM, Natural Earth";
 
 async function copyText(text) {
   try {
@@ -161,7 +161,7 @@ export function composeImage(info, { height = IMG_H } = {}) {
     ctx.font = `13px ${SANS}`;
     ctx.fillStyle = "#b9ab88";
     spaced(ctx, 2);
-    ctx.fillText(sel.kind === "state" ? "STATE" : "CITY", rx, cy - 30);
+    ctx.fillText(sel.kind === "state" ? "PROVINCE" : "CITY", rx, cy - 30);
     spaced(ctx, 0);
     ctx.font = `bold 24px ${SERIF}`;
     ctx.fillStyle = "#f3e6c4";

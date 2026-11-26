@@ -14,7 +14,7 @@ export function initSearch(opts) {
   if (!input || !box) return { focus() {}, close() {}, get isOpen() { return false; } };
   // The full placeholder only fits the wide search box; narrower ones say just "Search".
   const narrow = matchMedia("(max-width: 1120px)");
-  const setPlaceholder = () => (input.placeholder = narrow.matches ? "Search" : "Search cities & states");
+  const setPlaceholder = () => (input.placeholder = narrow.matches ? "Search" : "Search cities & provinces");
   setPlaceholder();
   narrow.addEventListener?.("change", setPlaceholder);
 
@@ -26,7 +26,7 @@ export function initSearch(opts) {
   (opts.states || []).forEach((s, index) => {
     if (!s) return;
     entries.push({ kind: "state", index, name: s.name, n: norm(s.name), full: norm(s.abbr), abbr: (s.abbr || "").toLowerCase(),
-      pop: s.population || 0, sub: "State", label: s.name });
+      pop: s.population || 0, sub: "Province", label: s.name });
   });
 
   let results = [];
@@ -64,7 +64,7 @@ export function initSearch(opts) {
 
   function render() {
     if (!results.length) {
-      box.innerHTML = input.value.trim() ? `<div class="sr-empty">No city or state matches “${esc(input.value.trim())}”</div>` : "";
+      box.innerHTML = input.value.trim() ? `<div class="sr-empty">No city or province matches “${esc(input.value.trim())}”</div>` : "";
       box.hidden = !input.value.trim();
       input.setAttribute("aria-expanded", String(!box.hidden));
       input.removeAttribute("aria-activedescendant");

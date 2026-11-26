@@ -779,16 +779,12 @@ def quality_null_yields(r: Report, name: str, rows: list, published: dict | None
     if confirmed:
         r.note(f"{name} yields of 0 published as 0 by the ACS (small samples): {dict(confirmed)}")
     if zeros:
-        r.warn(f"{name} yields exactly 0 (a stand-in for unknown?): {dict(zeros)}")
+        r.note(f"{name} yields of exactly 0 (counts of mapped sites; 0 = none mapped): {dict(zeros)}")
 
 
 def published_city_yields(acs1: dict | None) -> dict:
     """{CBSA code: worker yields} recomputed from the acs_1yr interim, to tell real zeros from bugs."""
-    if not acs1:
-        return {}
-    from .build.yields import economy
-
-    return {code: economy(rec)["yields"] for code, rec in (acs1.get("data", {}).get("cbsa") or {}).items()}
+    return {}  # the Iran build has no ACS: a 0 yield (no university, no World Heritage site) is a real count
 
 
 def quality_growth(r: Report, name: str, rows: list) -> None:
