@@ -239,10 +239,25 @@ export function upkeep(g, f) {
   return { blds, units, free, total: blds + units };
 }
 
+export const coinCap = (income) => Math.max(40, income * 8);
+
+/** Collect the coins waiting in one city (or all the player's cities): returns the amount. */
+export function collect(g, c = null) {
+  let n = 0;
+  for (const x of c ? [c] : g.cities.filter((x) => x.f === g.human)) { n += x.coins || 0; x.coins = 0; }
+  g.factions[(c || { f: g.human }).f].gold += n;
+  return n;
+}
+
 function payUpkeep(g, f) {
   const F = g.factions[f];
   if (F.broke > 0) F.broke--;
   F.gold -= upkeep(g, f).total;
+  if (F.gold < 0) for (const c of citiesOf(g, f)) { // dip into uncollected coins before anything is lost
+    const take = Math.min(c.coins || 0, -F.gold);
+    c.coins = (c.coins || 0) - take;
+    F.gold += take;
+  }
   if (F.gold >= 0) return;
   F.gold = 0;
   const order = ["scout", "guard", "caravan", "envoy", "builder"];
@@ -828,10 +843,12 @@ function processCities(g, board, f) {
   const F = g.factions[f];
   let sci = 0;
   for (const c of citiesOf(g, f)) {
-    if (!c.build) autoBuild(g, c);
+    if (!c.build && F.ai) autoBuild(g, c); // the player's idle cities save their production until told what to make
     const y = cityYields(g, board, c);
     sci += y.sci;
-    F.gold += y.gold;
+    // The player's cities fill a coin purse that is collected by tapping it (up to 8 seasons' worth); rivals bank at once.
+    if (F.ai) F.gold += y.gold;
+    else c.coins = Math.min((c.coins || 0) + y.gold, coinCap(y.gold));
     F.goldEarned += y.gold;
     F.culture += y.cult;
     c.cult += y.cult;

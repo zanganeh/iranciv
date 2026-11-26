@@ -2,13 +2,16 @@
 // cities, units, selection and move range (screen space, on top). They read `view` (set by ui.js).
 
 import { SQRT3, UNITS, BUILDINGS, LUXURIES } from "./rules.js";
-import { visibleSet, has, cityYields, tileYield } from "./game.js";
+import { visibleSet, has, cityYields, tileYield, bestSite, coinCap } from "./game.js";
 import { drawAncientCity, drawUnitToken, drawBuilding, cityRadius, cityDrawR } from "./art.js";
 
 const YIELD_EMOJI = { food: "🌾", prod: "⚒️", gold: "🪙", sci: "📜", cult: "🏺" };
 
 export function createView() {
-  return { g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1, lens: null, preview: null, settle: null, buy: null };
+  return {
+    g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1, lens: null, preview: null, settle: null, buy: null,
+    frac: 0, msPerTurn: 8000, fx: [], anim: new Map(), stepCell: -1,
+  };
 }
 
 /** Call after anything in the game changed (move, turn, build). */
@@ -122,7 +125,22 @@ function buildCache(view) {
       grow: y.mood.unhappy > 0 ? "😠" : c.pop >= y.mood.housing ? "🏠" : y.surplus > 0 ? `👥${Math.ceil((y.need - c.food) / y.surplus)}` : y.surplus < 0 ? "⚠️" : "👥∞",
     });
   }
-  return { version: view.version, lensKey: view.lens, fogDark, fogDim, fills, edges, farms, mines, qanats, roads, lens, marks, info };
+  // buildings under construction: where they will stand, how far along, how fast
+  const sites = [];
+  for (const c of g.cities) {
+    if (!c.build || c.build.kind !== "bld" || (F && !F.seen[c.cell])) continue;
+    const B = BUILDINGS[c.build.id];
+    const cell = c.build.site != null ? c.build.site : bestSite(g, board, c, c.build.id);
+    const y = cityYields(g, board, c);
+    sites.push({ c, cell, id: c.build.id, centre: cell === c.cell, p0: Math.min(1, c.prod / B.cost), rate: y.prod / B.cost, mine: c.f === me });
+  }
+  // coin purses of my cities
+  const purses = [];
+  for (const c of g.cities) {
+    if (c.f !== me || !c.coins) continue;
+    purses.push({ c, coins: c.coins, full: c.coins / coinCap(cityYields(g, board, c).gold) });
+  }
+  return { version: view.version, lensKey: view.lens, sites, purses, fogDark, fogDim, fills, edges, farms, mines, qanats, roads, lens, marks, info };
 }
 
 /** World-space layer: territory, improvements, fog. */
@@ -178,6 +196,13 @@ export function drawWorld(ctx, cam, view) {
       });
     }
   }
+  // construction sites: scaffolding, and the building rising out of the ground as the work goes on
+  if (cam.scale >= 0.9) for (const st of c.sites) {
+    if (st.centre) continue;
+    const t = view.board.tiles[st.cell];
+    const p = Math.min(1, st.p0 + st.rate * view.frac);
+    drawSite(ctx, st.id, t.x, t.y, view.board.grid.R * 0.5, px, p);
+  }
   // move range of the selected unit
   if (view.reach && view.reach.size) {
     const p = new Path2D();
@@ -200,6 +225,38 @@ export function drawWorld(ctx, cam, view) {
   ctx.fill(c.fogDark);
   ctx.fillStyle = "rgba(14,16,22,0.42)";
   ctx.fill(c.fogDim);
+}
+
+function drawSite(ctx, id, x, y, s, px, p) {
+  // the plot, then the building revealed from the bottom up
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, s * 1.15, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(160,130,90,0.55)";
+  ctx.fill();
+  ctx.beginPath();
+  const top = y + s * 1.2 - s * 2.6 * p;
+  ctx.rect(x - s * 1.4, top, s * 2.8, s * 2.8);
+  ctx.clip();
+  ctx.globalAlpha = 0.9;
+  drawBuilding(ctx, id, x, y, s, px);
+  ctx.restore();
+  // scaffolding poles and braces over the top
+  ctx.strokeStyle = "rgba(120,84,40,0.95)";
+  ctx.lineWidth = Math.max(px, s * 0.07);
+  const h = s * 1.5, w = s * 0.9;
+  ctx.beginPath();
+  for (const dx of [-w, 0, w]) { ctx.moveTo(x + dx, y + s * 0.6); ctx.lineTo(x + dx, y + s * 0.6 - h); }
+  for (let k = 0; k <= 2; k++) { const yy = y + s * 0.6 - (h * k) / 2; ctx.moveTo(x - w, yy); ctx.lineTo(x + w, yy); }
+  ctx.moveTo(x - w, y + s * 0.6); ctx.lineTo(x, y + s * 0.6 - h / 2);
+  ctx.moveTo(x, y + s * 0.6 - h / 2); ctx.lineTo(x + w, y + s * 0.6 - h);
+  ctx.stroke();
+  // a little crane
+  ctx.beginPath();
+  ctx.moveTo(x + w, y + s * 0.6 - h); ctx.lineTo(x + w, y - h * 1.05);
+  ctx.lineTo(x - w * 0.4, y - h * 1.05);
+  ctx.moveTo(x - w * 0.2, y - h * 1.05); ctx.lineTo(x - w * 0.2, y - h * 0.7);
+  ctx.stroke();
 }
 
 const LENS_COLOR = { food: "#7fbf3f", prod: "#d9823b", gold: "#f2c94c", sci: "#4fa3e0", cult: "#b07ce0" };
@@ -474,6 +531,76 @@ export function drawTokens(ctx, cam, view) {
       ctx.fillText(label, x, y + 0.5);
     }
   }
+  const now = performance.now();
+  // build progress rings with a live countdown, on my construction sites
+  if (!small) for (const st of view.cache?.sites || []) {
+    if (!st.mine) continue;
+    const t = board.tiles[st.cell];
+    const x = sx(t.x), y = sy(t.y) - (st.centre ? 0 : board.grid.R * s * 0.15);
+    if (!onScreen(x, y)) continue;
+    const p = Math.min(1, st.p0 + st.rate * view.frac);
+    const rr = st.centre ? 13 : Math.max(13, Math.min(26, board.grid.R * s * 0.32));
+    const cx = st.centre ? x + 30 : x, cy = st.centre ? y - 30 : y - rr - 6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(20,22,28,0.78)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, rr - 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p);
+    ctx.strokeStyle = "#f0a04b";
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+    ctx.font = `${Math.round(rr * 0.9)}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff";
+    ctx.fillText("🏗️", cx, cy + 1);
+    const left = st.rate > 0 ? ((1 - p) / st.rate) * view.msPerTurn / 1000 : Infinity;
+    const lab = isFinite(left) ? (left >= 60 ? `${Math.floor(left / 60)}:${String(Math.ceil(left % 60)).padStart(2, "0")}` : `${Math.ceil(left)}s`) : "∞";
+    ctx.font = "700 11px system-ui, sans-serif";
+    const w = ctx.measureText(lab).width + 10;
+    ctx.fillStyle = "rgba(20,22,28,0.85)";
+    roundRect(ctx, cx - w / 2, cy + rr + 2, w, 15, 7);
+    ctx.fill();
+    ctx.fillStyle = "#ffd59a";
+    ctx.fillText(lab, cx, cy + rr + 10);
+  }
+  // coin purses over my cities: tap the city to collect
+  for (const pu of view.cache?.purses || []) {
+    const t = board.tiles[pu.c.cell];
+    const x = sx(t.x) - (small ? 12 : 34), y = sy(t.y) - (small ? 14 : 34);
+    if (!onScreen(x, y)) continue;
+    const pulse = pu.full >= 1 ? 1 + 0.08 * Math.sin(now / 150) : 1;
+    const r = (small ? 8 : 12 + 6 * Math.min(1, pu.full)) * pulse;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    const grad = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.2, x, y, r);
+    grad.addColorStop(0, "#fff3b0");
+    grad.addColorStop(1, pu.full >= 1 ? "#e0a020" : "#d9b23a");
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = "#7a5410";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#4a3208";
+    ctx.textAlign = "center";
+    ctx.font = `800 ${small ? 9 : 12}px system-ui, sans-serif`;
+    ctx.fillText(String(pu.coins), x, y + 1);
+  }
+  // a pointer at whatever the next-step button is about
+  if (view.stepCell >= 0 && !view.cityView) {
+    const t = board.tiles[view.stepCell];
+    const x = sx(t.x), y = sy(t.y) - (small ? 16 : 40) + Math.sin(now / 220) * 5;
+    if (onScreen(x, y)) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + 12); ctx.lineTo(x - 9, y); ctx.lineTo(x - 4, y); ctx.lineTo(x - 4, y - 10);
+      ctx.lineTo(x + 4, y - 10); ctx.lineTo(x + 4, y); ctx.lineTo(x + 9, y); ctx.closePath();
+      ctx.fillStyle = "#ffe27a";
+      ctx.fill();
+      ctx.strokeStyle = "#5a4210";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
   // units, grouped by cell
   const byCell = new Map();
   for (const u of g.units) {
@@ -489,9 +616,67 @@ export function drawTokens(ctx, cam, view) {
     const x0 = sx(t.x), y0 = sy(t.y) + (c ? (small ? 10 : cityRadius(cityDrawR(board.grid.R, c.pop, s), c.pop) * s - 6) : 0);
     if (!onScreen(x0, y0)) continue;
     list.forEach((u, k) => {
-      const x = x0 + (k - (list.length - 1) / 2) * (2 * r + 3), y = y0;
+      let x = x0 + (k - (list.length - 1) / 2) * (2 * r + 3), y = y0;
+      const an = view.anim.get(u.id);
+      if (an) { // glide in from where it was
+        const e = Math.min(1, (now - an.t0) / an.dur);
+        const ease = 1 - (1 - e) * (1 - e);
+        const ft = board.tiles[an.from];
+        x += (sx(ft.x) - sx(t.x)) * (1 - ease);
+        y += (sy(ft.y) - sy(t.y)) * (1 - ease) - Math.sin(ease * Math.PI) * 6;
+        if (e >= 1) view.anim.delete(u.id);
+      }
       drawUnitToken(ctx, u.type, x, y, r, g.factions[u.f].color, { dim: u.f === me && u.moves <= 0, selected: sel?.unit === u });
     });
+  }
+}
+
+/** Short-lived effects: completion "plops", floating numbers, goal celebrations. Screen space. */
+export function drawFx(ctx, cam, view) {
+  const { board } = view;
+  if (!board || !view.fx.length) return;
+  const now = performance.now();
+  const s = cam.scale;
+  const sx = (x) => (x - cam.x) * s + cam.w / 2, sy = (y) => (y - cam.y) * s + cam.h / 2;
+  view.fx = view.fx.filter((f) => now - f.t0 < f.dur);
+  for (const f of view.fx) {
+    const e = (now - f.t0) / f.dur;
+    const t = board.tiles[f.cell];
+    const x = sx(t.x), y = sy(t.y);
+    ctx.save();
+    if (f.kind === "plop") {
+      // ring of light, dust, and a bouncing label
+      ctx.globalAlpha = 1 - e;
+      ctx.beginPath();
+      ctx.arc(x, y, 10 + 70 * e, 0, Math.PI * 2);
+      ctx.strokeStyle = f.color || "#ffe9a8";
+      ctx.lineWidth = 4 * (1 - e) + 1;
+      ctx.stroke();
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2 + f.seed;
+        const d = 18 + 45 * e;
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d * 0.6 + 10 * e, 5 * (1 - e) + 1, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(220,200,160,0.8)";
+        ctx.fill();
+      }
+    }
+    if (f.text) {
+      const rise = f.kind === "plop" ? 50 : 40;
+      const bounce = f.kind === "plop" ? Math.max(0, Math.sin(Math.min(1, e * 3) * Math.PI)) * 8 : 0;
+      ctx.globalAlpha = e < 0.75 ? 1 : (1 - e) / 0.25;
+      ctx.font = `800 ${f.big ? 18 : 14}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const ty = y - 30 - rise * e - bounce;
+      const w = ctx.measureText(f.text).width + 16;
+      ctx.fillStyle = "rgba(20,22,28,0.85)";
+      roundRect(ctx, x - w / 2, ty - 13, w, 26, 13);
+      ctx.fill();
+      ctx.fillStyle = f.color || "#fff0b4";
+      ctx.fillText(f.text, x, ty + 1);
+    }
+    ctx.restore();
   }
 }
 

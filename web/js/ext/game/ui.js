@@ -9,10 +9,11 @@ import {
   newGame, endTurn, save, load, cityYields, factionTotals, availableTechs, setResearch, buildOptions, setBuild,
   buildCost, hurryCost, hurry, canFound, foundCity, reachable, orderMove, improveOptions, improve, routeTargets,
   unitsAt, cityAt, embassyTargets, siteOptions, siteBonus, SITE_RULES, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
-  queueBuild, unqueue, raiseQueued, toggleLock, buyOptions, buyTile, upkeep, luxuriesOf, paths, pathTo,
+  queueBuild, unqueue, raiseQueued, toggleLock, buyOptions, buyTile, upkeep, luxuriesOf, paths, pathTo, collect,
 } from "./game.js";
 import { aiTurn, actUnit } from "./ai.js";
-import { createView, touch, drawWorld, drawTokens } from "./render.js";
+import { createView, touch, drawWorld, drawTokens, drawFx } from "./render.js";
+import { GOALS, currentGoal, claimGoals, nextSteps, topBuilds, topTechs, SPEEDS, fmtSecs } from "./live.js";
 import { createMinimap } from "./minimap.js";
 
 const SAVE_KEY = "iranciv.game.v1";
@@ -26,6 +27,10 @@ const store = {
 export function installGame(app) {
   const view = createView();
   let board = null, g = null, dockEl = null, offs = [], busy = false, showTechs = false, queueMode = false, mini = null;
+  // The clock: time runs by itself (speed 1-3) or waits (0). "Turn by turn" brings back the End turn button.
+  const PREF_KEY = "iranciv.turnmode";
+  let turnMode = false, speed = 0, seasonStart = performance.now(), hudEl = null, steps = [], lastLive = 0, rafId = 0;
+  try { turnMode = localStorage.getItem(PREF_KEY) === "1"; } catch { /* no storage */ }
 
   if (!document.querySelector("style[data-bundled]")) { // the single-file build inlines the styles
     const link = document.createElement("link");
@@ -140,9 +145,61 @@ export function installGame(app) {
     view.preview = null;
     view.settle = settleAdvice(view.sel?.unit);
     view.buy = view.cityView ? buyOptions(g, board, view.cityView) : null;
+    celebrateGoals();
     store.set(save(g));
     app.requestDraw();
     render();
+  }
+
+  function celebrateGoals() {
+    if (!g || g.over) return;
+    for (const G of claimGoals(g)) {
+      const c = citiesOf(g, g.human)[0];
+      const cell = c ? c.cell : unitsOf(g, g.human)[0]?.cell;
+      if (cell != null) view.fx.push({ kind: "plop", cell, t0: performance.now(), dur: 2200, text: `✓ ${G.text}  +${G.gold} 🪙`, color: "#b9ec9f", seed: Math.random() * 6, big: true });
+      bumpGold();
+      touch(view);
+    }
+  }
+
+  function bumpGold() {
+    const el = document.querySelector(".gm-hud-gold");
+    if (!el) return;
+    el.classList.remove("bump");
+    void el.offsetWidth;
+    el.classList.add("bump");
+  }
+
+  // Coins fly from the city to the gold counter.
+  function collectAt(c) {
+    const n = collect(g, c);
+    if (!n) return 0;
+    g.factions[g.human].collected = (g.factions[g.human].collected || 0) + n;
+    const targets = c ? [c] : [];
+    const goldEl = document.querySelector(".gm-hud-gold");
+    const to = goldEl?.getBoundingClientRect();
+    for (const city of targets.length ? targets : citiesOf(g, g.human)) {
+      const t = board.tiles[city.cell];
+      const cam = app.cam;
+      const x = (t.x - cam.x) * cam.scale + cam.w / 2 - 34, y = (t.y - cam.y) * cam.scale + cam.h / 2 - 34 + 40;
+      for (let k = 0; k < 6 && to; k++) {
+        const coin = document.createElement("div");
+        coin.className = "gm-coin";
+        coin.textContent = "🪙";
+        coin.style.left = x + (k - 3) * 6 + "px";
+        coin.style.top = y + "px";
+        document.body.appendChild(coin);
+        requestAnimationFrame(() => {
+          coin.style.transitionDelay = k * 45 + "ms";
+          coin.style.left = to.left + to.width / 2 + "px";
+          coin.style.top = to.top + to.height / 2 + "px";
+          coin.style.opacity = "0.2";
+        });
+        setTimeout(() => coin.remove(), 900 + k * 45);
+      }
+    }
+    setTimeout(bumpGold, 700);
+    return n;
   }
 
   function onMapClick(ev) {
@@ -171,6 +228,12 @@ export function installGame(app) {
       return true;
     }
     const c = cityAt(g, cell);
+    if (c && c.f === g.human && c.coins > 0) {
+      const n = collectAt(c);
+      app.ui.toast(`+${n} gold collected`);
+      changed();
+      if (view.sel?.city !== c) { select({ city: c }); return true; }
+    }
     if (c && F.seen[cell]) {
       if (view.sel?.city === c && c.f === g.human) openCity(c); // a second click opens the close-up
       else select({ city: c });
@@ -251,21 +314,176 @@ export function installGame(app) {
     app.flyTo(board.tiles[u.cell].x, board.tiles[u.cell].y, Math.max(app.cam.scale, 1.4), 400);
   }
 
+  // --- the clock ---------------------------------------------------------------------------------------------
+  const IMPORTANT = /won|age ends|completed the|earthquake|Drought|flooded|First contact|lost the race|treasury is empty/;
+
+  /** One season passes: the world moves, and what changed is shown on the map. */
+  function advanceSeason() {
+    if (busy || !g || g.over) return;
+    busy = true;
+    const before = g.log.length;
+    const pos = new Map(g.units.map((u) => [u.id, u.cell]));
+    const mineBefore = new Map(g.cities.map((c) => [c.id, { pop: c.pop, blds: Object.keys(c.blds).length }]));
+    endTurn(g, board, aiTurn);
+    // Scouts set to explore move on by themselves at the start of every season.
+    for (const u of unitsOf(g, g.human)) if (u.auto && u.moves > 0) actUnit(g, board, u);
+    busy = false;
+    seasonStart = performance.now();
+    view.frac = 0;
+    const now = performance.now();
+    const F = g.factions[g.human];
+    for (const u of g.units) {
+      const from = pos.get(u.id);
+      if (from != null && from !== u.cell && (F.seen[u.cell] || F.seen[from])) view.anim.set(u.id, { from, t0: now, dur: Math.min(700, view.msPerTurn * 0.6) });
+    }
+    for (const c of g.cities) {
+      const b = mineBefore.get(c.id);
+      if (!F.seen[c.cell]) continue;
+      if (b && Object.keys(c.blds).length > b.blds) {
+        const id = Object.keys(c.blds).find((k) => c.blds[k] === g.turn - 1) || Object.keys(c.blds).pop();
+        const site = c.sites?.[id] ?? c.cell;
+        view.fx.push({ kind: "plop", cell: site, t0: now, dur: 1800, text: `${BUILDINGS[id].wonder ? "✦ " : ""}${BUILDINGS[id].name} built`, seed: Math.random() * 6, big: !!BUILDINGS[id].wonder, color: c.f === g.human ? "#ffe9a8" : g.factions[c.f].color });
+      }
+      if (b && c.f === g.human && c.pop > b.pop) view.fx.push({ kind: "float", cell: c.cell, t0: now + 300, dur: 1400, text: "+1 👥", color: "#b9ec9f" });
+      if (!b && c.f === g.human) view.fx.push({ kind: "plop", cell: c.cell, t0: now, dur: 1800, text: `${c.name} founded`, seed: 1, big: true });
+    }
+    const news = g.log.slice(before).filter((e) => e.f === g.human || e.f === -1);
+    const big = news.filter((e) => IMPORTANT.test(e.text));
+    if (turnMode) report(news, yearLabel(g.turn));
+    else if (big.length) { report(big, yearLabel(g.turn)); setSpeed(0); }
+    if (g.over) { store.clear(); setSpeed(0); }
+    changed();
+    // Pause when a city has nothing to make or research is empty: one clear thing needs you.
+    if (!turnMode && speed > 0 && (citiesOf(g, g.human).some((c) => !c.build) || (!F.research && availableTechs(g, g.human).length))) setSpeed(0);
+  }
+
   function doEndTurn() {
     if (busy || g.over) return;
-    busy = true;
-    render();
-    setTimeout(() => {
-      const before = g.log.length;
-      endTurn(g, board, aiTurn);
-      // Scouts set to explore move on by themselves at the start of every turn.
-      for (const u of unitsOf(g, g.human)) if (u.auto && u.moves > 0) actUnit(g, board, u);
-      busy = false;
-      const news = g.log.slice(before).filter((e) => e.f === g.human || e.f === -1);
-      report(news, yearLabel(g.turn));
-      if (g.over) store.clear();
-      changed();
-    }, 30);
+    advanceSeason();
+  }
+
+  function setSpeed(k) {
+    if (k > 0 && speed === 0) seasonStart = performance.now() - view.frac * SPEEDS[k]; // resume where the season was
+    else if (k > 0) seasonStart = performance.now() - view.frac * SPEEDS[k];
+    speed = k;
+    view.msPerTurn = SPEEDS[k || 1];
+    renderHud();
+  }
+
+  function loop(now) {
+    rafId = requestAnimationFrame(loop);
+    if (app.mode !== "game" || !g) return;
+    if (!turnMode && speed > 0 && !busy && !g.over && !startEl) {
+      view.frac = Math.min(1, (now - seasonStart) / SPEEDS[speed]);
+      if (view.frac >= 1) advanceSeason();
+    }
+    const animating = view.fx.length || view.anim.size || view.cache?.purses?.some((p) => p.full >= 1) || view.stepCell >= 0;
+    if (now - lastLive > (animating ? 16 : 120)) {
+      lastLive = now;
+      if (animating || speed > 0) app.requestDraw();
+      updateLive();
+    }
+  }
+
+  /** Countdowns and bars in the panel tick smoothly between seasons without rebuilding it. */
+  function updateLive() {
+    const ms = SPEEDS[speed || 1];
+    for (const el of document.querySelectorAll("[data-cd]")) {
+      const turns = +el.dataset.cd;
+      el.textContent = turnMode ? `${isFinite(turns) ? turns : "∞"} turns` : fmtSecs((turns - view.frac) * ms / 1000);
+    }
+    for (const el of document.querySelectorAll("[data-bar]")) {
+      const [p0, rate] = el.dataset.bar.split(",").map(Number);
+      el.style.width = `${Math.max(0, Math.min(100, (p0 + rate * view.frac) * 100)).toFixed(1)}%`;
+    }
+    const ring = hudEl?.querySelector(".gm-season i");
+    if (ring) ring.style.setProperty("--p", (view.frac * 100).toFixed(1));
+  }
+
+  // --- the HUD: resources on top, the clock and one clear next step at the bottom --------------------------------
+  let picking = null; // "tech" while the research picker is open
+  let lastSpeed = 1;
+  function renderHud() {
+    if (!hudEl) return;
+    if (!g) { hudEl.innerHTML = ""; return; }
+    const F = g.factions[g.human];
+    const tot = factionTotals(g, board, g.human);
+    const up = upkeep(g, g.human);
+    const coins = citiesOf(g, g.human).reduce((n, c) => n + (c.coins || 0), 0);
+    let settle = null;
+    if (!citiesOf(g, g.human).length) settle = settleAdvice(unitsOf(g, g.human).find((u) => u.type === "pioneer"));
+    steps = nextSteps(g, board, { settle, running: speed > 0 && !turnMode });
+    view.stepCell = steps[0]?.cell ?? -1;
+    const goal = currentGoal(g);
+    const goalN = g.goal || 0;
+    const stepBtn = (st, k) => `<button class="gm-step ${k ? "alt" : "main"}" data-step="${k}"><span class="gm-step-i">${st.icon}</span><span class="gm-step-t">${esc(st.text)}${st.sub ? `<small>${esc(st.sub)}</small>` : ""}</span></button>`;
+    const clock = turnMode
+      ? `<button class="gm-clockbtn wide" data-hud="end" ${busy || g.over ? "disabled" : ""}>End turn ⏎</button>`
+      : [[0, "❚❚", "Pause (space)"], [1, "▶", "Normal speed (1)"], [2, "▶▶", "Fast (2)"], [3, "▶▶▶", "Very fast (3)"]].map(([k, l, t]) =>
+        `<button class="gm-clockbtn ${speed === k ? "on" : ""}" data-speed="${k}" title="${t}" aria-label="${t}">${l}</button>`).join("");
+    let pick = "";
+    if (picking === "tech") {
+      const ts = topTechs(g, g.human);
+      pick = `<div class="gm-pick panel"><div class="gm-pick-h"><b>Choose what to study</b><button class="gm-x" data-hud="closepick" aria-label="Close">✕</button></div>
+        <div class="gm-pick-row">${ts.map((t, k) => `<button class="gm-card ${k === 0 ? "rec" : ""}" data-pick-tech="${t.id}">${k === 0 ? '<span class="gm-rec">Advised</span>' : ""}<b>${esc(t.name)}</b>
+          <span class="gm-card-big">📜 ${t.cost}</span><small>${esc(t.unlocks)}</small></button>`).join("")}</div></div>`;
+    }
+    hudEl.innerHTML = `
+      <div class="gm-hud-top">
+        <span class="gm-hud-res gm-hud-gold" title="Gold in the treasury. Income goes into each city's coin purse: tap a city's coins to collect them. Upkeep ${up.total} a season.">🪙 <b>${F.gold}</b>${coins ? `<small>+${coins} to collect</small>` : ""}</span>
+        <span class="gm-hud-res" title="Science a season">📜 <b>${tot.sci}</b></span>
+        <span class="gm-hud-res" title="Culture">🏺 <b>${F.culture}</b></span>
+        <span class="gm-hud-res" title="People in ${tot.cities} cities">👥 <b>${tot.pop}</b></span>
+        ${goal ? `<span class="gm-goal" title="Goal ${goalN + 1} of ${GOALS.length}">🎯 ${goal.icon} ${esc(goal.text)} <em>+${goal.gold} 🪙</em></span>` : ""}
+      </div>
+      ${pick}
+      <div class="gm-hud-bar">
+        <div class="gm-clock"><div class="gm-season" title="${esc(yearLabel(g.turn))}, season ${g.turn + 1} of ${MAX_TURNS}"><i style="--p:${(view.frac * 100).toFixed(1)}"></i><b>${esc(yearLabel(g.turn))}</b></div>${clock}</div>
+        <div class="gm-steps">${steps.slice(0, 3).map(stepBtn).join("")}</div>
+      </div>`;
+  }
+
+  function runStep(st) {
+    if (!st || !g || g.over) return;
+    const fly = (cell) => { if (cell != null && cell >= 0) { const t = board.tiles[cell]; app.flyTo(t.x, t.y, Math.max(app.cam.scale, 2.2), 450); } };
+    switch (st.act) {
+      case "found": {
+        const c = foundCity(g, board, st.unit);
+        if (c) { select({ city: c }); fly(c.cell); }
+        break;
+      }
+      case "move": orderMove(g, board, st.unit, st.cell); select({ unit: st.unit }); fly(st.cell); break;
+      case "build":
+        setBuild(g, st.city, st.kind, st.id);
+        select({ city: st.city });
+        fly(st.city.cell);
+        view.fx.push({ kind: "float", cell: st.city.cell, t0: performance.now(), dur: 1300, text: "🏗️ Work begins" });
+        break;
+      case "research": picking = "tech"; renderHud(); return;
+      case "collect": { const n = collectAt(null); app.ui.toast(`+${n} gold collected`); break; }
+      case "auto": case "explore":
+        st.unit.auto = true;
+        actUnit(g, board, st.unit);
+        if (g.units.includes(st.unit)) { select({ unit: st.unit }); fly(st.unit.cell); }
+        break;
+      case "hurry":
+        if (hurry(g, st.city)) view.fx.push({ kind: "float", cell: st.city.cell, t0: performance.now(), dur: 1300, text: "⚡ Finishes this season", color: "#ffd59a" });
+        bumpGold();
+        break;
+      case "play": setSpeed(lastSpeed || 1); return;
+      case "faster": setSpeed(Math.min(3, speed + 1)); return;
+    }
+    changed();
+  }
+
+  function onHudClick(e) {
+    const b = e.target.closest("button");
+    if (!b || b.disabled || !g) return;
+    if (b.dataset.step != null) { runStep(steps[+b.dataset.step]); return; }
+    if (b.dataset.speed != null) { const k = +b.dataset.speed; if (k) lastSpeed = k; setSpeed(k); return; }
+    if (b.dataset.pickTech) { setResearch(g, g.human, b.dataset.pickTech); picking = null; changed(); return; }
+    if (b.dataset.hud === "closepick") { picking = null; renderHud(); return; }
+    if (b.dataset.hud === "end") doEndTurn();
   }
 
   // --- turn report: what happened while the world moved ----------------------------------------------------------
@@ -293,6 +511,9 @@ export function installGame(app) {
   }
 
   // --- the dock --------------------------------------------------------------------------------------------------
+  function liveBar(p0, rate, color) {
+    return `<span class="gm-bar"><span data-bar="${p0},${rate}" style="width:${Math.max(0, Math.min(100, p0 * 100)).toFixed(1)}%;background:${color}"></span></span>`;
+  }
   function bar(v, color) {
     return `<span class="gm-bar"><span style="width:${Math.max(0, Math.min(100, v * 100)).toFixed(1)}%;background:${color}"></span></span>`;
   }
@@ -300,7 +521,7 @@ export function installGame(app) {
 
   function render() {
     if (!dockEl || !g) return;
-    if (view.cityView) { dockEl.innerHTML = cityScreenHtml(view.cityView); return; }
+    if (view.cityView) { dockEl.innerHTML = cityScreenHtml(view.cityView); renderHud(); return; }
     const F = g.factions[g.human];
     const tot = factionTotals(g, board, g.human);
     const era = ERAS[Math.max(0, ...Object.keys(F.techs).map((t) => TECH[t].era), 0)];
@@ -312,16 +533,7 @@ export function installGame(app) {
     </div>`);
     const up = upkeep(g, g.human), net = tot.gold - up.total;
     const lux = luxuriesOf(g, board, g.human);
-    h.push(`<div class="gm-stores">
-      <span class="gm-y${net < 0 ? " neg" : ""}" title="Gold: +${tot.gold} income, -${up.blds} building upkeep, -${up.units} for units beyond the ${up.free} you support for free"><span aria-hidden="true">🪙</span>${F.gold}<small>${net >= 0 ? "+" : ""}${net}</small></span>
-      ${yieldChip("sci", tot.sci, "<small>/turn</small>")}
-      ${yieldChip("cult", F.culture, `<small>+${tot.cult}</small>`)}
-      <span class="gm-y" title="Population"><span aria-hidden="true">👥</span>${tot.pop}<small>${tot.cities} cities</small></span>
-      <span class="gm-y" title="Luxuries you enjoy: each kind keeps one more citizen content in every city${lux.size ? `. ${[...lux.keys()].map((k) => LUXURIES[k].name).join(", ")}` : ""}"><span aria-hidden="true">💎</span>${lux.size}<small>luxuries</small></span>
-    </div>`);
-    if (net < 0 && F.gold + net < 0) h.push(`<div class="gm-warn" style="margin:6px 14px 0">Your treasury runs dry next turn: a unit will be sent home. Build Markets or disband units.</div>`);
-    h.push(`<div class="gm-lens" role="group" aria-label="Map view"><span class="muted">Map</span>${[[null, "Plain"], ["food", "🌾 Food"], ["prod", "⚒️ Prod."], ["gold", "🪙 Gold"]].map(([k, l]) =>
-      `<button class="${view.lens === k ? "on" : ""}" data-lens="${k || ""}">${l}</button>`).join("")}</div>`);
+    if (net < 0 && F.gold + net < 0 && !citiesOf(g, g.human).some((c) => c.coins > 0)) h.push(`<div class="gm-warn" style="margin:6px 14px 0">The treasury runs dry next season: a unit will be sent home.</div>`);
     if (g.over) {
       const W = g.factions[g.over.winner];
       const won = g.over.winner === g.human;
@@ -329,55 +541,48 @@ export function installGame(app) {
         <p>${esc(W.name)} ${g.over.kind === "score" ? `lead on score at ${esc(yearLabel(g.over.turn))}` : `won a ${VICTORY_NAME[g.over.kind]} victory in ${esc(yearLabel(g.over.turn))}`}.</p>
         <p class="muted">${g.factions.map((x) => `${esc(x.name)} ${score(g, board, x.k)}`).join(" · ")}</p>
         <button class="btn" data-act="new">Play again</button></div>`);
-    } else {
-      h.push(`<div class="gm-endrow"><button class="btn gm-end" data-act="end" ${busy ? "disabled" : ""}>${busy ? "The world moves…" : "End turn ⏎"}</button>
-        <button class="btn" data-act="next" title="Select the next unit with moves left (N)">Next unit</button></div>`);
     }
-    // research
-    const cur = F.research ? TECH[F.research] : null;
-    h.push(`<section class="gm-sec"><h3>Research</h3>`);
-    if (cur) {
-      const p = (F.progress[cur.id] || 0) / cur.cost;
-      const turns = tot.sci > 0 ? Math.ceil((cur.cost - (F.progress[cur.id] || 0)) / tot.sci) : "∞";
-      h.push(`<div class="gm-row"><b>${esc(cur.name)}</b><span class="muted">${turns} turns</span></div>${bar(p, YIELD_INFO.sci.color)}
-        <div class="muted gm-small">Unlocks ${esc(cur.unlocks)}</div>`);
-    } else if (availableTechs(g, g.human).length) h.push(`<div class="gm-warn">Choose what your scholars study.</div>`);
-    else h.push(`<div class="muted">Every idea of the age is known.</div>`);
-    if (showTechs || !cur) {
-      h.push(`<div class="gm-techs">${availableTechs(g, g.human).map((t) => `<button class="gm-opt ${t.id === F.research ? "on" : ""}" data-tech="${t.id}">
-        <b>${esc(t.name)}</b><span>${ERAS[t.era]} · ${t.cost} 📜</span><small>${esc(t.unlocks)}</small></button>`).join("")}</div>`);
-    }
-    h.push(`<button class="gm-link" data-act="techs">${showTechs ? "Hide choices" : "Change research"}</button>
-      <div class="gm-known">${TECHS.map((t) => `<span class="${F.techs[t.id] ? "on" : ""}" title="${esc(t.name)}: ${esc(t.unlocks)}">${esc(t.name)}</span>`).join("")}</div></section>`);
-    // selection
+    // the selected unit, city or hex comes first
     h.push(selectionHtml());
-    h.push(`<details class="gm-sec gm-guide" ${g.turn < 3 ? "open" : ""}><summary>How to play</summary><ol>
-      <li><b>Settle.</b> Select your Pioneer (P) and press <i>Found a city</i>. Rivers, lakes and fertile plains make the best sites; the side panel shows each hex's yields.</li>
-      <li><b>Build.</b> Click a city to choose what it makes. Builders (B) add farms, mines, qanats and roads; more Pioneers found more cities (each costs 1 population).</li>
-      <li><b>Explore and meet.</b> Scouts (S) reveal the land. Meeting another people gives both sides new ideas. Envoys (E) open embassies; Caravans (C) open trade routes.</li>
-      <li><b>Keep people content.</b> A city can keep only so many citizens content: luxuries (🌸🌴🐎 and others, worked with an Estate), Fire Temples and some buildings raise the limit. Unhappy citizens stop growth and cut output. Housing caps size too: fresh water, farms, qanats, Granaries and Aqueducts add room.</li>
-      <li><b>Mind the treasury.</b> Each building costs 1 Gold a turn and units beyond your free ones cost 1 Gold each. You can also buy land next to a city in its close-up screen.</li>
-      <li><b>Research.</b> Pick a tech; each era unlocks new buildings. Science comes from population, Libraries and trade.</li>
-      <li><b>Grow your culture.</b> Culture widens your borders. Heritage ground (real UNESCO sites) inside your borders counts toward a Culture victory.</li>
-      <li><b>Mind the land.</b> Earthquakes follow the real record of each place (Masonry halves the risk). Cities without water risk drought; river cities can flood.</li>
-      <li><b>Win</b> by Science, Culture or Prosperity, or lead on score when the age ends in 1500 CE. Keys: <kbd>Enter</kbd> ends the turn, <kbd>N</kbd> next unit, <kbd>F</kbd> found a city, <kbd>S</kbd> sleep or fortify.</li>
-    </ol></details>`);
-    // victory
+    // research: one line and a bar; choices open as three cards
+    const cur = F.research ? TECH[F.research] : null;
+    h.push(`<section class="gm-sec"><h3>Studying</h3>`);
+    if (cur) {
+      const done = F.progress[cur.id] || 0;
+      const left = tot.sci > 0 ? (cur.cost - done) / tot.sci : Infinity;
+      h.push(`<div class="gm-row"><b>📜 ${esc(cur.name)}</b><span class="muted" data-cd="${left}">${turnMode ? `${Math.ceil(left)} turns` : fmtSecs(left * SPEEDS[speed || 1] / 1000)}</span></div>${liveBar(done / cur.cost, tot.sci / cur.cost, YIELD_INFO.sci.color)}
+        <div class="muted gm-small">Unlocks ${esc(cur.unlocks)} · <button class="gm-link" data-act="techs">change</button></div>`);
+    } else if (availableTechs(g, g.human).length) h.push(`<button class="btn gm-open" data-act="techs">📜 Choose what to study</button>`);
+    else h.push(`<div class="muted">Every idea of the age is known.</div>`);
+    h.push(`</section>`);
+    h.push(`<div class="gm-lens" role="group" aria-label="Map view"><span class="muted">Map</span>${[[null, "Plain"], ["food", "🌾"], ["prod", "⚒️"], ["gold", "🪙"]].map(([k, l]) =>
+      `<button class="${view.lens === k ? "on" : ""}" data-lens="${k || ""}" title="${k ? `Show ${YIELD_INFO[k].label} on the land` : "Plain map"}">${l}</button>`).join("")}
+      <span class="muted" style="margin-left:auto" title="Luxuries you enjoy">💎 ${lux.size}</span></div>`);
+    // everything else folds away
     const pr = progress(g, board, g.human);
-    h.push(`<section class="gm-sec"><h3>Paths to victory</h3>
+    h.push(`<details class="gm-sec gm-guide"><summary>🏆 Victory</summary>
       <div class="gm-row"><b>📜 Science</b><span class="muted">${esc(pr.science.text)}</span></div>${bar(pr.science.value, YIELD_INFO.sci.color)}
       <div class="gm-row"><b>🏺 Culture</b><span class="muted">${esc(pr.culture.text)}</span></div>${bar(pr.culture.value, YIELD_INFO.cult.color)}
       <div class="gm-row"><b>🪙 Prosperity</b><span class="muted">${esc(pr.prosperity.text)}</span></div>${bar(pr.prosperity.value, YIELD_INFO.gold.color)}
       <div class="muted gm-small">Otherwise the highest score in 1500 CE wins.</div>
       <div class="gm-rivals">${g.factions.filter((x) => x.k !== g.human).map((x) => F.met[x.k] != null
         ? `<span style="--fc:${x.color}"><i></i>${esc(x.name)} · ${citiesOf(g, x.k).length} cities · score ${score(g, board, x.k)}</span>`
-        : `<span class="muted"><i></i>An unknown people</span>`).join("")}</div></section>`);
-    // chronicle
+        : `<span class="muted"><i></i>An unknown people</span>`).join("")}</div></details>`);
     const logs = g.log.filter((e) => e.f === g.human || e.f === -1).slice(-10).reverse();
-    h.push(`<section class="gm-sec"><h3>Chronicle</h3><ul class="gm-log">${logs.map((e) => `<li${e.cell >= 0 ? ` data-cell="${e.cell}"` : ""}><span>${esc(yearLabel(e.t))}</span> ${esc(e.text)}</li>`).join("")}</ul></section>`);
-    h.push(`<div class="gm-foot"><button class="gm-link" data-act="new">New game</button><button class="gm-link" data-act="exit">Back to the 2016 data map</button></div>
-      <p class="gm-note muted">An ancient 4X game on Iran's real terrain, rivers and earthquake record. The peoples are invented.</p>`);
+    h.push(`<details class="gm-sec gm-guide"><summary>📖 Chronicle</summary><ul class="gm-log">${logs.map((e) => `<li${e.cell >= 0 ? ` data-cell="${e.cell}"` : ""}><span>${esc(yearLabel(e.t))}</span> ${esc(e.text)}</li>`).join("")}</ul></details>`);
+    h.push(`<details class="gm-sec gm-guide"><summary>❔ How to play</summary><ol>
+      <li><b>Follow the big button</b> at the bottom: it always shows the most useful next step. Goals at the top pay gold.</li>
+      <li><b>Time runs by itself.</b> Pause with ⏸ or the space bar, speed up with ▶▶. It pauses when something needs you.</li>
+      <li><b>Collect coins.</b> Cities fill a coin purse. Tap it to bank the gold, then spend gold to finish builds now or buy land.</li>
+      <li><b>Keep people content and housed.</b> Luxuries worked with an Estate and Fire Temples keep citizens content; water, farms, qanats and Aqueducts add housing.</li>
+      <li><b>Win</b> by Science, Culture or Prosperity, or lead on score in 1500 CE.</li>
+      <li>Keys: <kbd>Space</kbd> pause, <kbd>1</kbd>-<kbd>3</kbd> speed, <kbd>N</kbd> next unit, <kbd>F</kbd> found a city, <kbd>S</kbd> sleep.</li>
+    </ol></details>`);
+    h.push(`<div class="gm-foot"><button class="gm-link" data-act="next">Next unit</button><button class="gm-link" data-act="turnmode">${turnMode ? "⏱ Play in real time" : "⏭ Play turn by turn"}</button><button class="gm-link" data-act="new">New game</button></div>
+      <div class="gm-foot" style="padding-top:4px"><button class="gm-link" data-act="exit">Back to the 2016 data map</button></div>
+      <p class="gm-note muted">An ancient strategy game on Iran's real terrain, rivers and earthquake record. The peoples are invented.</p>`);
     dockEl.innerHTML = h.join("");
+    renderHud();
   }
 
   function selectionHtml() {
@@ -451,7 +656,9 @@ export function installGame(app) {
     if (y.surplus < 0) return `${y.surplus} food: starving`;
     if (y.mood.unhappy > 0) return `+${y.surplus} food, growth stopped: unhappy`;
     if (c.pop >= y.mood.housing) return `+${y.surplus} food, growth stopped: no housing`;
-    return y.surplus > 0 ? `+${y.surplus} food, grows in ${Math.max(1, Math.ceil((y.need - c.food) / y.surplus))} turns` : "no spare food";
+    if (y.surplus <= 0) return "no spare food";
+    const left = (y.need - c.food) / y.surplus;
+    return `+${y.surplus} food, grows in <span data-cd="${left}">${turnMode ? `${Math.ceil(left)} turns` : fmtSecs(left * SPEEDS[speed || 1] / 1000)}</span>`;
   }
 
   function moodHtml(c, y) {
@@ -460,7 +667,7 @@ export function installGame(app) {
     return `<div class="gm-mood">
       <span class="gm-y${m.unhappy ? " neg" : ""}" title="Content: ${esc(tip(m.parts))}"><span aria-hidden="true">${m.unhappy ? "😠" : "😊"}</span>${Math.min(c.pop, m.content)}/${c.pop}<small>${m.unhappy ? `${m.unhappy} unhappy, -${m.unhappy * 10}% output` : `content, room for ${m.content - c.pop}`}</small></span>
       <span class="gm-y${c.pop >= m.housing ? " neg" : ""}" title="Housing: ${esc(tip(m.housingParts))}"><span aria-hidden="true">🏠</span>${c.pop}/${m.housing}<small>housing</small></span>
-      <span class="gm-y" title="Each building costs 1 Gold a turn; wonders are free"><span aria-hidden="true">🪙</span>${-Object.keys(c.blds).reduce((a, b) => a + upkeepOf(b), 0) || 0}<small>upkeep a turn</small></span>
+      <span class="gm-y" title="Each building costs 1 Gold a turn; wonders are free"><span aria-hidden="true">🪙</span>${-Object.keys(c.blds).reduce((a, b) => a + upkeepOf(b), 0) || 0}<small>upkeep a season</small></span>
     </div>${m.unhappy ? `<p class="gm-small gm-why">${esc(c.name)} stops growing while anyone is unhappy. Work a new luxury with an Estate, or build a Fire Temple.</p>` : c.pop >= m.housing ? `<p class="gm-small gm-why">No room to grow: an Aqueduct, Granary, farms or qanats add housing.</p>` : ""}`;
   }
 
@@ -469,8 +676,8 @@ export function installGame(app) {
     const q = c.queue || [];
     return `<div class="gm-queue">${q.length ? `<div class="muted gm-small">Then:</div><ol>${q.map((b, k) => `<li><span>${esc(buildName(b))}</span>
       ${k ? `<button class="gm-x" data-qup="${k}" title="Move up" aria-label="Move up">▲</button>` : ""}<button class="gm-x" data-qdel="${k}" title="Remove" aria-label="Remove">✕</button></li>`).join("")}</ol>` : ""}
-      <div class="gm-qmode" role="group" aria-label="Clicking a choice"><span class="muted">Click a choice to</span>
-        <button class="${queueMode ? "" : "on"}" data-qmode="0">build now</button><button class="${queueMode ? "on" : ""}" data-qmode="1">add to queue</button></div></div>`;
+      ${view.cityView ? `<div class="gm-qmode" role="group" aria-label="Clicking a choice"><span class="muted">Click a choice to</span>
+        <button class="${queueMode ? "" : "on"}" data-qmode="0">build now</button><button class="${queueMode ? "on" : ""}" data-qmode="1">add to queue</button></div>` : ""}</div>`;
   }
 
   const bonusText = (bn) => Object.entries(bn).map(([k, v]) => `+${v} ${YIELD_INFO[k].emoji}`).join(" ");
@@ -491,8 +698,9 @@ export function installGame(app) {
       const turns = y.prod > 0 ? Math.max(1, Math.ceil((cost - c.prod) / y.prod)) : "∞";
       const where = c.build.kind === "bld" ? (c.build.site != null && c.build.site !== c.cell ? " · on its own hex" : " · site chosen when done") : "";
       const hc = hurryCost(c);
-      h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted">${turns} turns${where}</span></div>${bar(c.prod / cost, YIELD_INFO.prod.color)}`);
-      if (hc > 0) h.push(`<button class="gm-link" data-act="hurry" ${F.gold >= hc ? "" : "disabled"}>Finish now for ${hc} 🪙</button>`);
+      const left = y.prod > 0 ? (cost - c.prod) / y.prod : Infinity;
+      h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted"><span data-cd="${left}">${turnMode ? `${turns} turns` : fmtSecs(left * SPEEDS[speed || 1] / 1000)}</span>${where}</span></div>${liveBar(c.prod / cost, y.prod / cost, YIELD_INFO.prod.color)}`);
+      if (hc > 0) h.push(`<button class="btn gm-rush" data-act="hurry" ${F.gold >= hc ? "" : "disabled"}>⚡ Finish now for ${hc} 🪙</button>`);
     } else h.push(`<div class="gm-warn">Choose what ${esc(c.name)} builds next.</div>`);
     h.push(queueHtml(c));
     h.push(moodHtml(c, y));
@@ -537,20 +745,34 @@ export function installGame(app) {
       return h.join("");
     }
     const y = cityYields(g, board, c);
-    h.push(`<button class="btn gm-open" data-act="opencity">🏛️ Open the city: place buildings</button>`);
-    h.push(`<div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>`);
-    h.push(`<div class="gm-row"><b>👥 Population ${c.pop}</b><span class="muted">${growText(c, y)}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}`);
+    const ms = SPEEDS[speed || 1] / 1000;
+    const cd = (left) => `<span class="muted" data-cd="${left}">${turnMode ? `${isFinite(left) ? Math.ceil(left) : "∞"} turns` : fmtSecs(left * ms)}</span>`;
+    // what it is making, with a live countdown and the gold button
     if (c.build) {
       const cost = buildCost(c.build);
-      const name = c.build.kind === "unit" ? UNITS[c.build.id].name : BUILDINGS[c.build.id].name;
-      const turns = y.prod > 0 ? Math.max(1, Math.ceil((cost - c.prod) / y.prod)) : "∞";
+      const left = y.prod > 0 ? (cost - c.prod) / y.prod : Infinity;
       const hc = hurryCost(c);
-      h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted">${Math.min(c.prod, cost)}/${cost}, ${turns} turns</span></div>${bar(c.prod / cost, YIELD_INFO.prod.color)}`);
-      if (hc > 0) h.push(`<button class="gm-link" data-act="hurry" ${g.factions[g.human].gold >= hc ? "" : "disabled"}>Finish now for ${hc} 🪙</button>`);
-    } else h.push(`<div class="gm-warn">Choose what ${esc(c.name)} builds.</div>`);
+      h.push(`<div class="gm-making"><span class="gm-making-i">${c.build.kind === "unit" ? UNITS[c.build.id].emoji : "🏗️"}</span>
+        <div><div class="gm-row" style="margin:0"><b>${esc(buildName(c.build))}</b>${cd(left)}</div>${liveBar(c.prod / cost, y.prod / cost, YIELD_INFO.prod.color)}</div>
+        ${hc > 0 ? `<button class="btn gm-rush" data-act="hurry" ${g.factions[g.human].gold >= hc ? "" : "disabled"} title="Finish it this season">⚡ ${hc} 🪙</button>` : ""}</div>`);
+    }
+    // the next choice: three cards, the advised one first
+    const top = topBuilds(g, c);
+    h.push(`<div class="gm-cards-h">${c.build ? "Then make" : `<b>What should ${esc(c.name)} make?</b>`}</div>
+      <div class="gm-cards">${top.map((o, k) => {
+        const desc = o.kind === "unit" ? UNITS[o.id].desc : BUILDINGS[o.id].desc;
+        const icon = o.kind === "unit" ? UNITS[o.id].emoji : o.wonder ? "✦" : "🏛️";
+        const left = y.prod > 0 ? o.cost / y.prod : Infinity;
+        return `<button class="gm-card ${k === 0 ? "rec" : ""}" data-build="${o.kind}:${o.id}" data-q="${c.build ? 1 : 0}" title="${esc(desc)}">${k === 0 ? '<span class="gm-rec">Advised</span>' : ""}
+          <span class="gm-card-big">${icon}</span><b>${esc(o.name)}</b><small>${turnMode ? `${Math.ceil(left)} turns` : fmtSecs(left * ms)}</small></button>`;
+      }).join("")}</div>`);
     h.push(queueHtml(c));
+    h.push(`<div class="gm-row"><b>👥 ${c.pop}</b><span class="muted">${growText(c, y)}</span></div>${liveBar(c.food / y.need, y.surplus / y.need, YIELD_INFO.food.color)}`);
     h.push(moodHtml(c, y));
-    h.push(`<div class="gm-builds">${buildOptions(g, c).map((o) => {
+    h.push(`<button class="btn gm-open" data-act="opencity">🏛️ Open the city</button>`);
+    h.push(`<details class="gm-more"><summary>All choices and details</summary>
+      <div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>
+      <div class="gm-builds">${buildOptions(g, c).map((o) => {
       const desc = o.kind === "unit" ? UNITS[o.id].desc : BUILDINGS[o.id].desc;
       const on = c.build && c.build.kind === o.kind && c.build.id === o.id;
       return `<button class="gm-opt ${on ? "on" : ""} ${o.wonder ? "wonder" : ""}" data-build="${o.kind}:${o.id}" ${o.ok || (queueMode && c.build) ? "" : "disabled"} title="${esc(desc)}">
@@ -563,7 +785,7 @@ export function installGame(app) {
     if (her.length) h.push(`<div class="gm-small"><b>Heritage ground:</b> ${esc(her.join(", "))}</div>`);
     h.push(`<div class="muted gm-small">${c.tiles.length} hexes inside its borders; borders grow with culture (${c.cult}/${c.nextClaim === Infinity ? "max" : c.nextClaim}).</div>`);
     h.push(tileLine(c.cell));
-    h.push(`</section>`);
+    h.push(`</details></section>`);
     return h.join("");
   }
 
@@ -584,7 +806,7 @@ export function installGame(app) {
     if (b.dataset.tech) { setResearch(g, g.human, b.dataset.tech); showTechs = false; changed(); return; }
     if (b.dataset.build) {
       const [k, id] = b.dataset.build.split(":");
-      if (queueMode && c.build) { if (!queueBuild(g, c, k, id)) app.ui.toast("Already queued, or the queue is full."); }
+      if ((queueMode || b.dataset.q === "1") && c.build) { if (!queueBuild(g, c, k, id)) app.ui.toast("Already queued, or the queue is full."); else app.ui.toast(`${b.querySelector("b")?.textContent || "It"} comes next.`); }
       else setBuild(g, c, k, id);
       changed();
       return;
@@ -601,7 +823,13 @@ export function installGame(app) {
       case "placecentre": setBuild(g, c, "bld", view.placing.bld, c.cell); view.placing = null; changed(); break;
       case "cancelplace": view.placing = null; app.requestDraw(); render(); break;
       case "next": nextUnit(); break;
-      case "techs": showTechs = !showTechs; render(); break;
+      case "techs": picking = "tech"; renderHud(); break;
+      case "turnmode":
+        turnMode = !turnMode;
+        try { localStorage.setItem(PREF_KEY, turnMode ? "1" : "0"); } catch { /* ignore */ }
+        setSpeed(0);
+        render();
+        break;
       case "found": {
         const city = foundCity(g, board, u);
         if (city) { select({ city }); app.ui.toast(`${city.name} founded.`); }
@@ -624,6 +852,8 @@ export function installGame(app) {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "")) return;
     const k = e.key.toLowerCase();
     if (k === "enter" && !e.target.closest?.("button")) { e.preventDefault(); doEndTurn(); }
+    else if (k === " " && !turnMode) { e.preventDefault(); if (speed) { lastSpeed = speed; setSpeed(0); } else setSpeed(lastSpeed || 1); }
+    else if ((k === "1" || k === "2" || k === "3") && !turnMode) { e.preventDefault(); lastSpeed = +k; setSpeed(+k); }
     else if (k === "n") { e.preventDefault(); nextUnit(); }
     else if (k === "s" && view.sel?.unit?.f === g.human) { const u = view.sel.unit; u.sleep = !u.sleep; if (u.sleep) { u.dest = -1; nextUnit(); } changed(); }
     else if (k === "f" && view.sel?.unit?.type === "pioneer") {
@@ -664,7 +894,13 @@ export function installGame(app) {
       dockEl.addEventListener("click", onDockClick);
       app.registerOverlay({ id: "game-world", z: 40, draw: (ctx, cam) => drawWorld(ctx, cam, view) });
       mini = createMinimap(app, view);
-      app.registerOverlay({ id: "game-tokens", z: 140, space: "screen", draw: (ctx, cam) => { drawTokens(ctx, cam, view); mini?.draw(cam); } });
+      app.registerOverlay({ id: "game-tokens", z: 140, space: "screen", draw: (ctx, cam) => { drawTokens(ctx, cam, view); drawFx(ctx, cam, view); mini?.draw(cam); } });
+      hudEl = document.createElement("div");
+      hudEl.className = "gm-hud";
+      hudEl.addEventListener("click", onHudClick);
+      document.body.appendChild(hudEl);
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(loop);
       const canvas = document.getElementById("map");
       canvas.addEventListener("pointermove", onMove);
       addEventListener("keydown", onKey);
@@ -687,6 +923,10 @@ export function installGame(app) {
       playBtn?.classList.remove("active");
       mini?.remove();
       mini = null;
+      hudEl?.remove();
+      hudEl = null;
+      cancelAnimationFrame(rafId);
+      setSpeed(0);
       closeStart();
       view.cityView = null;
       view.placing = null;
