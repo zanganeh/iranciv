@@ -241,3 +241,21 @@ def discard(source_id: str, rel_path: str) -> None:
     manifest = read_manifest(source_id)
     if manifest.pop(rel_path, None) is not None:
         atomic_write_text(manifest_path(source_id), json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def record(source_id: str, rel_path: str, url: str, **extra) -> Path:
+    """Add a manifest entry for a file that is already in data/raw/<source_id>/<rel_path> (a manual snapshot copied
+    in, or a file a source assembled itself, e.g. a raster resampled from many remote tiles). `url` is where the
+    content came from: a query, a page, or a list of tiles."""
+    dest = RAW / source_id / rel_path
+    digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+    manifest = read_manifest(source_id)
+    manifest[rel_path] = {
+        "url": url,
+        "sha256": digest,
+        "bytes": dest.stat().st_size,
+        "retrieved": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **extra,
+    }
+    atomic_write_text(manifest_path(source_id), json.dumps(manifest, indent=2, sort_keys=True))
+    return dest

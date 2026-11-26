@@ -58,6 +58,20 @@ class Source:
         """Header + the block of lines starting with `prefix` only (see fetch.download_prefix)."""
         return fetch.download_prefix(self.id, url, rel_path, prefix, header_start=header_start, force=force)
 
+    def use_manual(self, name: str, url: str, *, force: bool = False) -> Path:
+        """Copy data/manual/<name> (a snapshot queried by hand, see data/manual/README.md) into this source's raw
+        folder and record it in the manifest with `url` (the query or page it came from)."""
+        import shutil
+
+        from .paths import DATA
+
+        dest = self.raw_dir / name
+        if dest.exists() and not force:
+            return dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(DATA / "manual" / name, dest)
+        return fetch.record(self.id, name, url, manual=True)
+
     def discard(self, rel_path: str) -> None:
         """Forget a bad cached file (and its manifest entry) so the next fetch retries it."""
         fetch.discard(self.id, rel_path)

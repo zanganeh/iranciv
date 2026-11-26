@@ -1,7 +1,7 @@
 """Small, dependency-free geometry helpers.
 
-Everything on the map lives in "map km": an Albers equal-area projection of the
-contiguous US, shifted so the top-left of the map is (0, 0) and y points *down*
+Everything on the map lives in "map km": an Albers equal-area projection fitted to
+the country in core/region.py, shifted so the top-left of the map is (0, 0) and y points *down*
 (like screen coordinates). Both the hex grid and the browser use this space.
 """
 
@@ -84,7 +84,9 @@ class MapProjection:
     margin: float
 
     def __post_init__(self):
-        self._albers = Albers()
+        from .region import ALBERS
+
+        self._albers = Albers(**ALBERS)
 
     def __call__(self, lon: float, lat: float) -> tuple[float, float]:
         x, y = self._albers(lon, lat)

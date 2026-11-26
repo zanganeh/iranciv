@@ -13,7 +13,7 @@ from ..core.geo import AlbersEllipsoid, MapProjection, Shape, ShapeIndex
 from ..core.hexgrid import SQRT3, HexGrid
 from ..core.store import load_interim, save_interim, write_web
 
-REQUIRES = ["census_boundaries", "natural_earth", "etopo", "nlcd"]
+REQUIRES = ["iran_boundaries", "natural_earth", "terrain", "worldcover"]
 PRODUCES = ["_world", "world.json"]
 
 HEX_RADIUS_KM = 25.0
