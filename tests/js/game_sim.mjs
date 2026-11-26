@@ -39,6 +39,12 @@ for (let s = 1; s <= games; s++) {
     check(cs.length >= 2, `${F.name} founded at least 2 cities`);
   }
   check(g.units.every((u) => board.tiles[u.cell].land), "all units on land");
+  check(g.factions.every((F) => F.gold >= 0), "no treasury below zero");
+  check(board.tiles.filter((t) => t.lux).length >= 60, "luxuries placed on the board");
+  check(g.cities.every((c) => Array.isArray(c.queue) && Array.isArray(c.locked)), "cities carry a queue and locks");
+  const stalls = g.log.filter((e) => /no room to grow|stopped growing/.test(e.text)).length;
+  const broke = g.log.filter((e) => /treasury is empty/.test(e.text)).length;
+  console.log(`  pressure: ${stalls} growth stalls (housing or unrest), ${broke} empty-treasury turns`);
   const quakesLog = g.log.filter((e) => /earthquake/.test(e.text)).length;
   console.log(`  events: ${quakesLog} quakes, ${g.log.filter((e) => /Drought/.test(e.text)).length} droughts, ` +
     `${g.log.filter((e) => /trade route from/.test(e.text)).length} trade routes, ${g.factions.reduce((a, F) => a + Object.keys(F.met).length, 0) / 2} contacts, ${g.factions.reduce((a, F) => a + Object.keys(F.embassy || {}).length, 0)} embassies, ${g.log.filter((e) => /flooded/.test(e.text)).length} floods`);

@@ -59,11 +59,11 @@ export const TECHS = [
   { id: "mysticism", name: "Mysticism", era: 1, cost: 170, req: ["writing"], unlocks: "Fire Temple" },
   { id: "mathematics", name: "Mathematics", era: 1, cost: 205, req: ["writing", "masonry"], unlocks: "Aqueduct" },
   { id: "roads", name: "Royal Roads", era: 1, cost: 200, req: ["trade", "masonry"], unlocks: "Roads, Caravanserai" },
-  { id: "philosophy", name: "Philosophy", era: 2, cost: 780, req: ["mysticism", "mathematics"], unlocks: "Academy" },
-  { id: "paper", name: "Paper", era: 2, cost: 780, req: ["writing", "trade"], unlocks: "House of Wisdom" },
-  { id: "astronomy", name: "Astronomy", era: 2, cost: 1400, req: ["philosophy", "mathematics"], unlocks: "Observatory" },
-  { id: "banking", name: "Banking", era: 2, cost: 900, req: ["roads", "paper"], unlocks: "Bazaar" },
-  { id: "medicine", name: "Medicine", era: 2, cost: 900, req: ["philosophy", "qanat"], unlocks: "Bimaristan" },
+  { id: "philosophy", name: "Philosophy", era: 2, cost: 980, req: ["mysticism", "mathematics"], unlocks: "Academy" },
+  { id: "paper", name: "Paper", era: 2, cost: 980, req: ["writing", "trade"], unlocks: "House of Wisdom" },
+  { id: "astronomy", name: "Astronomy", era: 2, cost: 2300, req: ["philosophy", "mathematics"], unlocks: "Observatory" },
+  { id: "banking", name: "Banking", era: 2, cost: 1100, req: ["roads", "paper"], unlocks: "Bazaar" },
+  { id: "medicine", name: "Medicine", era: 2, cost: 1100, req: ["philosophy", "qanat"], unlocks: "Bimaristan" },
 ];
 export const TECH = Object.fromEntries(TECHS.map((t) => [t.id, t]));
 
@@ -78,20 +78,39 @@ export const UNITS = {
 };
 
 // --- buildings ---------------------------------------------------------------------------------------------------
+// content: citizens kept content in this city; contentAll: in every city of the owner (wonders); housing: room for
+// more citizens. Every ordinary building costs 1 Gold a turn to keep up; wonders cost nothing.
 export const BUILDINGS = {
-  granary: { name: "Granary", cost: 35, tech: "pottery", yields: { food: 2 }, desc: "+2 Food" },
+  granary: { name: "Granary", cost: 35, tech: "pottery", yields: { food: 2 }, housing: 1, desc: "+2 Food, +1 Housing" },
   library: { name: "Library", cost: 45, tech: "writing", yields: { sci: 2 }, pct: { sci: 0.25 }, desc: "+2 Science, +25% Science" },
   market: { name: "Market", cost: 50, tech: "trade", yields: { gold: 2 }, pct: { gold: 0.25 }, desc: "+2 Gold, +25% Gold" },
   workshop: { name: "Workshop", cost: 50, tech: "masonry", yields: { prod: 2 }, desc: "+2 Production" },
-  temple: { name: "Fire Temple", cost: 50, tech: "mysticism", yields: { cult: 2 }, desc: "+2 Culture" },
-  aqueduct: { name: "Aqueduct", cost: 70, tech: "mathematics", growth: 0.25, desc: "Cities grow 25% faster" },
+  temple: { name: "Fire Temple", cost: 50, tech: "mysticism", yields: { cult: 2 }, content: 2, desc: "+2 Culture, +2 Content" },
+  aqueduct: { name: "Aqueduct", cost: 70, tech: "mathematics", housing: 4, growth: 0.15, desc: "+4 Housing, grows 15% faster" },
   caravanserai: { name: "Caravanserai", cost: 60, tech: "roads", yields: { gold: 2 }, routes: 1, desc: "+2 Gold, +1 Gold per trade route" },
   academy: { name: "Academy", cost: 90, tech: "philosophy", yields: { sci: 3 }, pct: { sci: 0.25 }, desc: "+3 Science, +25% Science" },
-  wisdom: { name: "House of Wisdom", cost: 100, tech: "paper", yields: { sci: 2, cult: 2 }, desc: "+2 Science, +2 Culture" },
-  bazaar: { name: "Bazaar", cost: 100, tech: "banking", yields: { gold: 3 }, pct: { gold: 0.25 }, desc: "+3 Gold, +25% Gold" },
-  bimaristan: { name: "Bimaristan", cost: 90, tech: "medicine", yields: { food: 2 }, growth: 0.25, desc: "+2 Food, cities grow 25% faster" },
-  garden: { name: "Garden of Four Streams", cost: 260, tech: "mysticism", wonder: true, yields: { cult: 5, food: 2 }, desc: "Wonder: +5 Culture, +2 Food. A walled garden split by four water channels." },
-  observatory: { name: "Great Observatory", cost: 600, tech: "astronomy", wonder: true, yields: { sci: 6 }, desc: "Wonder: +6 Science. Needed for a Science victory." },
+  wisdom: { name: "House of Wisdom", cost: 100, tech: "paper", yields: { sci: 2, cult: 2 }, content: 1, desc: "+2 Science, +2 Culture, +1 Content" },
+  bazaar: { name: "Bazaar", cost: 100, tech: "banking", yields: { gold: 3 }, pct: { gold: 0.25 }, content: 1, desc: "+3 Gold, +25% Gold, +1 Content" },
+  bimaristan: { name: "Bimaristan", cost: 90, tech: "medicine", yields: { food: 2 }, housing: 2, content: 1, desc: "+2 Food, +2 Housing, +1 Content" },
+  garden: { name: "Garden of Four Streams", cost: 260, tech: "mysticism", wonder: true, yields: { cult: 5, food: 2 }, content: 2, contentAll: 1, desc: "Wonder: +5 Culture, +2 Food, +2 Content here and +1 in every city. A walled garden split by four water channels." },
+  observatory: { name: "Great Observatory", cost: 800, tech: "astronomy", wonder: true, yields: { sci: 6 }, desc: "Wonder: +6 Science. Needed for a Science victory." },
+};
+export const upkeepOf = (id) => (BUILDINGS[id].wonder ? 0 : 1);
+
+// --- luxuries -------------------------------------------------------------------------------------------------------
+// Fine goods of the land. A luxury inside your borders with any improvement on it (an Estate, farm or mine) keeps
+// one more citizen content in every city you have; a second of the same kind adds nothing. They are placed on the
+// board by a fixed pattern that suits the ground (saffron on dry plains, dates by desert water, and so on), so every
+// game has the same ones.
+export const LUXURIES = {
+  saffron: { name: "Saffron", emoji: "🌸", where: (t) => t.relief <= 1 && !t.fresh && (t.cover === "cropland" || t.cover === "scrub") },
+  dates: { name: "Dates", emoji: "🌴", where: (t) => t.relief === 0 && (t.fresh || t.coast) && (t.cover === "barren" || t.cover === "scrub") },
+  turquoise: { name: "Turquoise", emoji: "💠", where: (t) => t.relief >= 1 && (t.cover === "barren" || t.cover === "scrub") },
+  grapes: { name: "Grapes", emoji: "🍇", where: (t) => t.relief === 1 && (t.cover === "grassland" || t.cover === "cropland" || t.cover === "forest") },
+  silk: { name: "Silk", emoji: "🧵", where: (t) => t.cover === "forest" && t.relief <= 1 },
+  horses: { name: "Horses", emoji: "🐎", where: (t) => t.relief <= 1 && (t.cover === "pasture" || t.cover === "grassland") },
+  pearls: { name: "Pearls", emoji: "🦪", where: (t) => t.coast && t.relief === 0 && t.cover !== "forest" },
+  pistachio: { name: "Pistachios", emoji: "🌰", where: (t) => t.relief >= 1 && t.relief <= 2 && (t.cover === "scrub" || t.cover === "grassland") },
 };
 
 // --- improvements -------------------------------------------------------------------------------------------------
@@ -101,6 +120,7 @@ export const IMPROVEMENTS = {
   mine: { name: "Mine", emoji: "⛏️", yields: { prod: 2 }, tech: "bronze", desc: "+2 Production on hills, mountains or ore (+1 more on ore)." },
   qanat: { name: "Qanat", emoji: "💧", yields: { food: 2 }, tech: "qanat", desc: "+2 Food on dry land, from water led underground from the hills." },
   road: { name: "Road", emoji: "🛤️", yields: { gold: 1 }, tech: "roads", desc: "+1 Gold, and moving along it costs less." },
+  estate: { name: "Estate", emoji: "🏡", yields: { gold: 1 }, desc: "+1 Gold. Works a luxury, so every city of yours enjoys it." },
 };
 
 export function canImprove(board, i, kind, has) {
@@ -110,6 +130,7 @@ export function canImprove(board, i, kind, has) {
   if (imp.tech && !has(imp.tech)) return false;
   if (kind === "road") return !t.road;
   if (t.improvement) return false;
+  if (kind === "estate") return !!t.lux;
   if (kind === "farm") return (t.cover === "cropland" || t.cover === "grassland" || t.cover === "pasture" || t.cover === "urban" || t.cover === "scrub") && t.relief <= 1 && (t.fresh || has("irrigation"));
   if (kind === "mine") return t.relief >= 1 || t.ore;
   if (kind === "qanat") return t.relief === 0 && !t.fresh && (t.cover === "barren" || t.cover === "scrub" || t.cover === "grassland") && t.nearHills;
@@ -238,10 +259,39 @@ export function buildBoard(world, { resources = null, wonders = null } = {}) {
     t.fresh = t.river || lake;
     t.nearHills = hills || t.relief >= 1;
     t.passable = t.relief < 3;
+  }
+  placeLuxuries(grid, tiles);
+  for (let i = 0; i < n; i++) {
+    const t = tiles[i];
+    if (!t.land) continue;
     t.base = baseYields(t);
     t.name = tileName(t);
   }
   return { grid, tiles, n, landCount: tiles.filter((t) => t.land).length };
+}
+
+// A fixed hash, so luxuries sit in the same places every game.
+function hash01(i) {
+  let x = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35);
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+}
+
+function placeLuxuries(grid, tiles) {
+  // Each kind takes up to 12 spots that suit it, picked in turn so no kind crowds out the rest, never two within
+  // 2 hexes of each other.
+  const free = (t) => t.land && t.passable && !t.ore && !t.heritage && !t.lux;
+  const lists = Object.entries(LUXURIES).map(([id, L]) => [id, tiles.filter((t) => free(t) && L.where(t)).sort((p, q) => hash01(p.i) - hash01(q.i))]);
+  const taken = [];
+  const clear = (t) => taken.every((j) => hexDist(grid, j, t.i) > 2);
+  for (let round = 0; round < 12; round++) {
+    for (const [id, list] of lists) {
+      while (list.length) {
+        const t = list.shift();
+        if (!t.lux && clear(t)) { t.lux = id; taken.push(t.i); break; }
+      }
+    }
+  }
 }
 
 export function baseYields(t) {
@@ -261,6 +311,7 @@ export function baseYields(t) {
   if (t.coast) y.gold += 1;
   if (t.ore) y.prod += 1;
   if (t.heritage) y.cult += 2;
+  if (t.lux) y.gold += 1;
   return y;
 }
 

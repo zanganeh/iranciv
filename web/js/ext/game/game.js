@@ -6,10 +6,10 @@
 
 import {
   PEOPLES, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, MAX_TURNS, YIELD_KEYS,
-  LEANINGS, canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
+  LEANINGS, LUXURIES, upkeepOf, canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
 } from "./rules.js";
 
-export const WIN = { heritage: 4, culture: 2600, gold: 9500, pop: 95 };
+export const WIN = { heritage: 4, culture: 2600, gold: 9500, pop: 72 };
 const CITY_MIN_DIST = 4; // hexes between city centres
 const CLAIM_RADIUS = 3; // how far a city's borders can grow
 
@@ -128,7 +128,8 @@ export function tileYield(g, board, i) {
   return y;
 }
 
-const tileValue = (y, hungry) => y.food * (hungry ? 4 : 2.5) + y.prod * 2 + y.gold * 1.2 + y.sci * 1.5 + y.cult * 1.2;
+// hungry: needs food to eat; capped: cannot grow anyway (no housing, or growth would only add unhappy citizens).
+const tileValue = (y, hungry, capped = false) => y.food * (hungry ? 4 : capped ? 0.6 : 2.5) + y.prod * 2 + y.gold * 1.2 + y.sci * 1.5 + y.cult * 1.2;
 
 /** A city's yields this turn: centre + its best `pop` tiles inside its borders, then buildings and trade. */
 export function cityYields(g, board, c) {
@@ -142,10 +143,14 @@ export function cityYields(g, board, c) {
   for (const i of c.tiles) if (i !== c.cell && !built.has(i)) pool.push([i, tileYield(g, board, i)]);
   const worked = [];
   let food = y.food;
+  const locked = (c.locked || []).filter((i) => pool.some((p) => p[0] === i)).slice(0, c.pop);
+  const mood = cityMood(g, board, c);
+  const capped = c.pop >= mood.housing || c.pop >= mood.content;
   for (let k = 0; k < c.pop && pool.length; k++) {
-    const hungry = food < 2 * c.pop + 2;
+    const hungry = food < 2 * c.pop + (capped ? 0 : 2);
     let best = 0;
-    for (let j = 1; j < pool.length; j++) if (tileValue(pool[j][1], hungry) > tileValue(pool[best][1], hungry)) best = j;
+    if (k < locked.length) best = pool.findIndex((p) => p[0] === locked[k]);
+    else for (let j = 1; j < pool.length; j++) if (tileValue(pool[j][1], hungry, capped) > tileValue(pool[best][1], hungry, capped)) best = j;
     const [i, ty] = pool.splice(best, 1)[0];
     worked.push(i);
     for (const key of YIELD_KEYS) y[key] += ty[key];
@@ -167,9 +172,88 @@ export function cityYields(g, board, c) {
   }
   for (const r of c.routes) y.gold += r.gold + routeBonus;
   for (const r of c.routes) if (r.foreign) y.sci += 1;
-  for (const k of YIELD_KEYS) y[k] = Math.round(y[k] * (1 + pct[k]));
+  const unrest = 0.1 * Math.min(5, mood.unhappy); // each unhappy citizen costs 10% of everything but food
+  const broke = g.factions[c.f].broke > 0 ? 0.25 : 0;
+  for (const k of YIELD_KEYS) {
+    const cut = k === "food" ? 0 : unrest + (k === "prod" ? broke : 0);
+    y[k] = Math.round(y[k] * (1 + pct[k]) * (1 - cut));
+  }
   const eat = 2 * c.pop;
-  return { ...y, eat, surplus: y.food - eat, worked, growth, need: growNeed(c.pop, growth) };
+  return { ...y, eat, surplus: y.food - eat, worked, growth, need: growNeed(c.pop, growth), mood, unrest };
+}
+
+// --- contentment and housing ----------------------------------------------------------------------------------------
+// Citizens beyond what a city can keep content are unhappy: the city stops growing and loses 10% of its Production,
+// Gold, Science and Culture for each one. A city also stops growing when it runs out of housing.
+
+/** Luxury kinds people f enjoys: a luxury hex inside their borders with any improvement on it. */
+export function luxuriesOf(g, board, f) {
+  const out = new Map();
+  for (const c of g.cities) if (c.f === f) for (const i of c.tiles) {
+    const L = board.tiles[i].lux;
+    if (L && g.imp[i] && !out.has(L)) out.set(L, i);
+  }
+  return out;
+}
+
+export function cityMood(g, board, c) {
+  const mine = citiesOf(g, c.f);
+  const lux = luxuriesOf(g, board, c.f).size;
+  const parts = [["Base", 4]];
+  if (c.capital) parts.push(["Capital", 1]);
+  if (lux) parts.push([`Luxuries (${lux})`, lux]);
+  let bld = 0, all = 0;
+  for (const b of Object.keys(c.blds)) bld += BUILDINGS[b].content || 0;
+  for (const x of mine) for (const b of Object.keys(x.blds)) all += BUILDINGS[b].contentAll || 0;
+  if (bld) parts.push(["Buildings", bld]);
+  if (all) parts.push(["Wonders", all]);
+  const size = Math.floor((mine.length - 1) / 3);
+  if (size) parts.push([`Size of the realm (${mine.length} cities)`, -size]);
+  const content = parts.reduce((a, p) => a + p[1], 0);
+  // housing
+  const t = board.tiles[c.cell];
+  const hp = [["Base", 4]];
+  if (t.fresh) hp.push(["Fresh water", 2]);
+  else if (t.coast) hp.push(["Coast", 1]);
+  let hb = 0;
+  for (const b of Object.keys(c.blds)) hb += BUILDINGS[b].housing || 0;
+  if (hb) hp.push(["Buildings", hb]);
+  const qanats = Math.min(3, c.tiles.filter((i) => g.imp[i] === "qanat").length);
+  if (qanats) hp.push(["Qanats", qanats]);
+  const farms = Math.min(4, Math.floor(c.tiles.filter((i) => g.imp[i] === "farm").length / 2));
+  if (farms) hp.push(["Farms", farms]);
+  const housing = hp.reduce((a, p) => a + p[1], 0);
+  return { content, unhappy: Math.max(0, c.pop - content), parts, housing, housingParts: hp };
+}
+
+// --- upkeep ----------------------------------------------------------------------------------------------------------
+// Every ordinary building costs 1 Gold a turn. Each city supports one unit for free, plus two for the realm; every
+// unit beyond that costs 1 Gold. A treasury that runs dry disbands a unit, or idles the workshops for two turns.
+
+export function upkeep(g, f) {
+  let blds = 0;
+  const cs = citiesOf(g, f);
+  for (const c of cs) for (const b of Object.keys(c.blds)) blds += upkeepOf(b);
+  const n = unitsOf(g, f).length, free = cs.length + 2;
+  const units = Math.max(0, n - free);
+  return { blds, units, free, total: blds + units };
+}
+
+function payUpkeep(g, f) {
+  const F = g.factions[f];
+  if (F.broke > 0) F.broke--;
+  F.gold -= upkeep(g, f).total;
+  if (F.gold >= 0) return;
+  F.gold = 0;
+  const order = ["scout", "guard", "caravan", "envoy", "builder"];
+  const u = unitsOf(g, f).filter((x) => order.includes(x.type)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || b.id - a.id)[0];
+  if (u && upkeep(g, f).units > 0) {
+    removeUnit(g, u);
+    logMsg(g, f, `The treasury is empty: a ${UNITS[u.type].name} could not be paid and went home.`, u.cell);
+  } else {
+    F.broke = 2;
+    logMsg(g, f, `The treasury is empty: unpaid workers leave the workshops (-25% Production for 2 turns).`);
+  }
 }
 
 // --- building sites -------------------------------------------------------------------------------------------------
@@ -309,6 +393,7 @@ export function foundCity(g, board, u) {
   const c = {
     id: g.cities.length, f: u.f, name, cell: u.cell, pop: 1, food: 0, prod: 0, build: null, blds: {}, routes: [],
     cult: 0, claims: 0, nextClaim: 8, tiles: [], founded: g.turn, capital: citiesOf(g, u.f).length === 0, sites: {},
+    queue: [], locked: [],
   };
   g.cities.push(c);
   g.cityAt[c.cell] = c.id;
@@ -365,6 +450,67 @@ export function setBuild(g, c, kind, id, site = null) {
   if (!o || !o.ok) return false;
   c.build = { kind, id };
   if (kind === "bld" && site != null && siteOptions(g, board_(g), c, id).some((x) => x.cell === site)) c.build.site = site;
+  if (kind === "bld") c.queue = (c.queue || []).filter((q) => !(q.kind === "bld" && q.id === id));
+  return true;
+}
+
+// The build queue: what the city makes after the current item, in order.
+export function queueBuild(g, c, kind, id, site = null) {
+  if (!c.build) return setBuild(g, c, kind, id, site);
+  c.queue = c.queue || [];
+  if (c.queue.length >= 6) return false;
+  if (kind === "bld" && (c.build.kind === "bld" && c.build.id === id || c.queue.some((q) => q.kind === "bld" && q.id === id))) return false;
+  if (!buildOptions(g, c).some((x) => x.kind === kind && x.id === id)) return false;
+  const q = { kind, id };
+  if (site != null) q.site = site;
+  c.queue.push(q);
+  return true;
+}
+export function unqueue(c, k) { if (c.queue?.[k]) c.queue.splice(k, 1); }
+export function raiseQueued(c, k) {
+  if (!c.queue || k <= 0 || k >= c.queue.length) return;
+  [c.queue[k - 1], c.queue[k]] = [c.queue[k], c.queue[k - 1]];
+}
+function nextFromQueue(g, c) {
+  c.build = null;
+  while (c.queue?.length) {
+    const q = c.queue.shift();
+    if (setBuild(g, c, q.kind, q.id, q.site ?? null)) return;
+    // a queued Pioneer waits for the city to reach 2 population
+    if (q.kind === "unit" && buildOptions(g, c).some((o) => o.kind === "unit" && o.id === q.id)) { c.build = { kind: q.kind, id: q.id }; return; }
+  }
+}
+
+// Citizens: a locked hex is always worked first (up to the city's population).
+export function toggleLock(g, c, cell) {
+  c.locked = c.locked || [];
+  const k = c.locked.indexOf(cell);
+  if (k >= 0) { c.locked.splice(k, 1); return false; }
+  if (cell === c.cell || !c.tiles.includes(cell) || builtCells(c).has(cell)) return false;
+  c.locked.push(cell);
+  if (c.locked.length > c.pop) c.locked.shift();
+  return true;
+}
+
+// Buying land: any free hex next to the city's borders, within reach of its centre.
+export const tileCost = (g, board, c, cell) => 10 + 3 * c.tiles.length + 8 * hexDist(board.grid, c.cell, cell);
+export function buyOptions(g, board, c) {
+  const out = new Map();
+  for (const i of c.tiles) for (let d = 0; d < 6; d++) {
+    const j = board.grid.neighbour(i, d);
+    if (j < 0 || out.has(j) || !board.tiles[j].land || g.terr[j] >= 0 || hexDist(board.grid, c.cell, j) > CLAIM_RADIUS) continue;
+    out.set(j, tileCost(g, board, c, j));
+  }
+  return [...out].map(([cell, cost]) => ({ cell, cost }));
+}
+export function buyTile(g, board, c, cell) {
+  const o = buyOptions(g, board, c).find((x) => x.cell === cell);
+  const F = g.factions[c.f];
+  if (!o || F.gold < o.cost) return false;
+  F.gold -= o.cost;
+  claim(g, board, c, cell);
+  syncBoard(g, board);
+  logMsg(g, c.f, `${c.name} bought the land at ${board.tiles[cell].name} for ${o.cost} Gold.`, cell);
   return true;
 }
 // setBuild is called without the board; the board is attached to g at runtime (not saved).
@@ -504,6 +650,7 @@ export function reachable(g, board, u) {
 
 /** Send a unit toward `cell`: it moves now as far as it can and keeps going on later turns. */
 export function orderMove(g, board, u, cell) {
+  u.sleep = false;
   if (cell === u.cell) { u.dest = -1; return true; }
   const dist = paths(g, board, u, 400, cell);
   if (!dist.has(cell)) return false;
@@ -665,6 +812,7 @@ export function endTurn(g, board, ai = null) {
     if (!F.research) autoResearch(g, F.k);
     const sci = processCities(g, board, F.k) + 2 * Object.keys(F.embassy || {}).length;
     research(g, F.k, sci);
+    payUpkeep(g, F.k);
   }
   events(g, board);
   g.turn++;
@@ -688,9 +836,18 @@ function processCities(g, board, f) {
     F.culture += y.cult;
     c.cult += y.cult;
     growBorders(g, board, c);
-    // growth
+    // growth: stops while any citizen is unhappy or the city has no room
     c.food += y.surplus;
-    if (c.food >= y.need) {
+    const full = c.pop >= y.mood.housing, upset = y.mood.unhappy > 0;
+    if ((full || upset) && c.food >= y.need) {
+      c.food = y.need;
+      const why = full ? "housing" : "unrest";
+      if (c.stall !== why) logMsg(g, f, full
+        ? `${c.name} has no room to grow (housing ${y.mood.housing}). Aqueducts, granaries, farms and qanats add housing.`
+        : `${c.name} has stopped growing: ${y.mood.unhappy} citizen${y.mood.unhappy > 1 ? "s are" : " is"} unhappy. Temples and luxuries help.`, c.cell);
+      c.stall = why;
+    } else if (c.food >= y.need) {
+      c.stall = null;
       c.food -= y.need;
       c.pop++;
       if (c.blds.granary) c.food += Math.floor(y.need * 0.25);
@@ -706,7 +863,7 @@ function processCities(g, board, f) {
     if (c.build) {
       c.prod += y.prod;
       if (c.prod >= buildCost(c.build)) {
-        if (finishBuild(g, board, c)) c.build = null;
+        if (finishBuild(g, board, c)) nextFromQueue(g, c);
       }
     } else c.prod += y.prod;
   }
@@ -765,12 +922,20 @@ export function autoBuild(g, c) {
   const wantCities = F.leaning === "expander" ? 9 : 6;
   const pick = (kind, id) => opts.find((o) => o.kind === kind && o.id === id);
   let choice = null;
-  if (mine.length + count("pioneer") < wantCities && count("pioneer") < 1 + (mine.length >= 3 ? 1 : 0) && c.pop >= 3) choice = pick("unit", "pioneer");
+  // First fix what holds the city back: unrest, no room to grow, an empty treasury.
+  const y = g._board ? cityYields(g, g._board, c) : null;
+  if (y) {
+    const net = factionTotals(g, g._board, c.f).gold - upkeep(g, c.f).total;
+    if (y.mood.unhappy > 0) choice = pick("bld", "temple") || pick("bld", "bazaar") || pick("bld", "wisdom") || pick("bld", "bimaristan");
+    if (!choice && c.pop >= y.mood.housing - 1) choice = pick("bld", "aqueduct") || pick("bld", "granary") || pick("bld", "bimaristan");
+    if (!choice && net < 2) choice = pick("bld", "market") || pick("bld", "caravanserai") || pick("bld", "bazaar");
+  }
+  if (!choice && mine.length + count("pioneer") < wantCities && count("pioneer") < 1 + (mine.length >= 3 ? 1 : 0) && c.pop >= 3) choice = pick("unit", "pioneer");
   if (!choice && count("builder") < Math.ceil(mine.length / 2) + 1) choice = pick("unit", "builder");
   if (!choice && has(g, c.f, "writing") && count("envoy") < 1 && new Set(embassyTargets(g, c.f).map((x) => x.f)).size > 0) choice = pick("unit", "envoy");
   if (!choice && has(g, c.f, "trade") && c.routes.length < maxRoutes(c) && count("caravan") < 1 + (F.leaning === "trader" ? 1 : 0) && (g.turn + c.id) % 3 === 0) choice = pick("unit", "caravan");
   if (!choice) for (const b of LEAN_BLD[F.leaning] || []) if ((choice = pick("bld", b))) break;
-  if (!choice) choice = opts.find((o) => o.kind === "bld") || pick("unit", "builder") || opts[0];
+  if (!choice) choice = opts.find((o) => o.kind === "bld") || (count("builder") < mine.length ? pick("unit", "builder") : null);
   if (choice) c.build = { kind: choice.kind, id: choice.id };
   return c.build;
 }
@@ -873,6 +1038,7 @@ export function load(text, board) {
     terr: Int16Array.from(o.terr), road: fromBits(o.road), cityAt: Int16Array.from(o.cityAt),
     factions: o.factions.map((F) => ({ ...F, seen: fromBits(F.seen) })),
   };
+  for (const c of g.cities) { c.queue = c.queue || []; c.locked = c.locked || []; }
   syncBoard(g, board);
   return g;
 }

@@ -1,16 +1,23 @@
 // Rival AI: simple, readable heuristics by leaning. Research and city builds use game.js's auto pickers; this file
 // moves units: pioneers look for good sites, scouts explore, builders improve worked land, caravans open routes.
 
-import { UNITS, IMPROVEMENTS, hexDist, ring, siteScore, canImprove } from "./rules.js";
+import { UNITS, BUILDINGS, IMPROVEMENTS, hexDist, ring, siteScore, canImprove } from "./rules.js";
 import {
   has, citiesOf, embassyTargets, canFound, foundCity, paths, pathTo, orderMove, improve, routeTargets, factionOf, autoResearch,
-  autoBuild, cityYields, disband,
+  autoBuild, cityYields, disband, hurry, hurryCost,
 } from "./game.js";
 
 export function aiTurn(g, board, f) {
   const F = g.factions[f];
   if (!F.research) autoResearch(g, f);
   for (const c of citiesOf(g, f)) if (!c.build) autoBuild(g, c);
+  // Spend a full treasury: finish the most expensive work in progress, keeping a reserve for upkeep.
+  const reserve = 25 + 5 * citiesOf(g, f).length;
+  for (const c of [...citiesOf(g, f)].sort((a, b) => hurryCost(b) - hurryCost(a))) {
+    const cost = hurryCost(c);
+    const worth = cost > 0 && (c.build.kind === "bld" ? !(BUILDINGS[c.build.id].wonder && cost > 400) : c.build.id === "pioneer");
+    if (worth && F.gold - cost >= reserve) hurry(g, c);
+  }
   const worked = new Set();
   for (const c of citiesOf(g, f)) for (const i of cityYields(g, board, c).worked) worked.add(i);
   for (const u of g.units.filter((x) => x.f === f)) {
@@ -87,7 +94,7 @@ function scout(g, board, u) {
 
 function builder(g, board, u, worked) {
   const hasT = (t) => has(g, u.f, t);
-  const order = ["qanat", "farm", "mine", "road"];
+  const order = ["estate", "qanat", "farm", "mine", "road"];
   if (!worked) {
     worked = new Set();
     for (const c of citiesOf(g, u.f)) for (const i of cityYields(g, board, c).worked) worked.add(i);
@@ -108,7 +115,7 @@ function builder(g, board, u, worked) {
   for (const [cell, e] of dist) {
     const kind = wantAt(cell);
     if (!kind) continue;
-    const v = (worked.has(cell) ? 10 : 2) + (kind === "qanat" ? 3 : kind === "road" ? -4 : 0) - e.cost;
+    const v = (worked.has(cell) ? 10 : 2) + (kind === "estate" ? 12 : kind === "qanat" ? 3 : kind === "road" ? -4 : 0) - e.cost;
     if (v > bestV) { bestV = v; best = cell; }
   }
   if (best < 0) return;

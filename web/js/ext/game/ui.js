@@ -2,15 +2,18 @@
 // victory progress, chronicle), map overlays from render.js, and map clicks that select and move.
 
 import {
-  buildBoard, PEOPLES, LEANINGS, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, ERAS, MAX_TURNS, YIELD_INFO, yearLabel, hexDist,
+  buildBoard, PEOPLES, LEANINGS, TECHS, TECH, UNITS, BUILDINGS, IMPROVEMENTS, LUXURIES, ERAS, MAX_TURNS, YIELD_INFO, yearLabel, hexDist,
+  siteScore, upkeepOf,
 } from "./rules.js";
 import {
   newGame, endTurn, save, load, cityYields, factionTotals, availableTechs, setResearch, buildOptions, setBuild,
   buildCost, hurryCost, hurry, canFound, foundCity, reachable, orderMove, improveOptions, improve, routeTargets,
   unitsAt, cityAt, embassyTargets, siteOptions, siteBonus, SITE_RULES, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
+  queueBuild, unqueue, raiseQueued, toggleLock, buyOptions, buyTile, upkeep, luxuriesOf, paths, pathTo,
 } from "./game.js";
 import { aiTurn, actUnit } from "./ai.js";
 import { createView, touch, drawWorld, drawTokens } from "./render.js";
+import { createMinimap } from "./minimap.js";
 
 const SAVE_KEY = "iranciv.game.v1";
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -22,7 +25,7 @@ const store = {
 
 export function installGame(app) {
   const view = createView();
-  let board = null, g = null, dockEl = null, offs = [], busy = false, showTechs = false;
+  let board = null, g = null, dockEl = null, offs = [], busy = false, showTechs = false, queueMode = false, mini = null;
 
   if (!document.querySelector("style[data-bundled]")) { // the single-file build inlines the styles
     const link = document.createElement("link");
@@ -108,13 +111,35 @@ export function installGame(app) {
   function select(sel) {
     view.sel = sel;
     view.reach = sel?.unit && sel.unit.f === g.human ? reachable(g, board, sel.unit) : null;
+    view.preview = null;
+    view.settle = settleAdvice(sel?.unit);
     app.requestDraw();
     render();
+  }
+  // Where a selected pioneer might settle: the three best seen sites within 8 hexes, spread apart.
+  function settleAdvice(u) {
+    if (!u || u.type !== "pioneer" || u.f !== g.human) return null;
+    const F = g.factions[g.human];
+    const cand = [];
+    for (let i = 0; i < board.n; i++) {
+      if (!F.seen[i] || hexDist(board.grid, u.cell, i) > 8 || !canFound(g, board, g.human, i).ok) continue;
+      cand.push([i, siteScore(board, i) - hexDist(board.grid, u.cell, i) * 1.5]);
+    }
+    cand.sort((a, b) => b[1] - a[1]);
+    const out = [];
+    for (const [i] of cand) {
+      if (out.every((j) => hexDist(board.grid, i, j) >= 3)) out.push(i);
+      if (out.length === 3) break;
+    }
+    return out;
   }
   function changed() {
     touch(view);
     if (view.sel?.unit && !g.units.includes(view.sel.unit)) view.sel = null;
     view.reach = view.sel?.unit && view.sel.unit.f === g.human ? reachable(g, board, view.sel.unit) : null;
+    view.preview = null;
+    view.settle = settleAdvice(view.sel?.unit);
+    view.buy = view.cityView ? buyOptions(g, board, view.cityView) : null;
     store.set(save(g));
     app.requestDraw();
     render();
@@ -163,6 +188,8 @@ export function installGame(app) {
     view.cityTile = null;
     view.sel = { city: c };
     view.reach = null;
+    view.settle = null;
+    view.buy = buyOptions(g, board, c);
     reportEl?.remove();
     const t = board.tiles[c.cell];
     app.flyTo(t.x, t.y, 5.2, 600);
@@ -173,13 +200,14 @@ export function installGame(app) {
     const c = view.cityView;
     view.cityView = null;
     view.placing = null;
+    view.buy = null;
     if (c) { const t = board.tiles[c.cell]; app.flyTo(t.x, t.y, 2.4, 500); }
     app.requestDraw();
     render();
   }
   function startPlacing(id) {
     const c = view.cityView;
-    view.placing = { bld: id, options: siteOptions(g, board, c, id) };
+    view.placing = { bld: id, options: siteOptions(g, board, c, id), queue: queueMode && !!c.build };
     app.requestDraw();
     render();
   }
@@ -188,14 +216,29 @@ export function installGame(app) {
     if (view.placing) {
       const o = view.placing.options.find((x) => x.cell === cell);
       if (o) {
-        setBuild(g, c, "bld", view.placing.bld, cell);
-        app.ui.toast(`${BUILDINGS[view.placing.bld].name} will stand ${o.centre ? "in the city centre" : "here"}.`);
+        if (view.placing.queue) queueBuild(g, c, "bld", view.placing.bld, cell);
+        else setBuild(g, c, "bld", view.placing.bld, cell);
+        app.ui.toast(`${BUILDINGS[view.placing.bld].name} will stand ${o.centre ? "in the city centre" : "here"}${view.placing.queue ? " (queued)" : ""}.`);
         view.placing = null;
         changed();
       }
       return true;
     }
-    if (c.tiles.includes(cell)) { view.cityTile = cell; render(); }
+    const buy = (view.buy || []).find((o) => o.cell === cell);
+    if (buy) {
+      if (buyTile(g, board, c, cell)) { app.ui.toast(`Bought for ${buy.cost} Gold.`); changed(); }
+      else app.ui.toast(`You need ${buy.cost} Gold to buy this land.`);
+      return true;
+    }
+    if (c.tiles.includes(cell)) {
+      view.cityTile = cell;
+      const built = new Set(Object.values(c.sites || {}));
+      if (cell !== c.cell && !built.has(cell)) {
+        const on = toggleLock(g, c, cell);
+        app.ui.toast(on ? "Citizens will always work this hex." : "Unlocked: the city chooses again.");
+        changed();
+      } else render();
+    }
     return true;
   }
 
@@ -267,12 +310,18 @@ export function installGame(app) {
       <div class="gm-title"><b>${esc(F.name)}</b><span>${esc(era)} era</span></div>
       <div class="gm-year"><b>${esc(yearLabel(g.turn))}</b><span>Turn ${g.turn + 1} of ${MAX_TURNS}</span></div>
     </div>`);
+    const up = upkeep(g, g.human), net = tot.gold - up.total;
+    const lux = luxuriesOf(g, board, g.human);
     h.push(`<div class="gm-stores">
-      ${yieldChip("gold", F.gold, `<small>+${tot.gold}</small>`)}
+      <span class="gm-y${net < 0 ? " neg" : ""}" title="Gold: +${tot.gold} income, -${up.blds} building upkeep, -${up.units} for units beyond the ${up.free} you support for free"><span aria-hidden="true">🪙</span>${F.gold}<small>${net >= 0 ? "+" : ""}${net}</small></span>
       ${yieldChip("sci", tot.sci, "<small>/turn</small>")}
       ${yieldChip("cult", F.culture, `<small>+${tot.cult}</small>`)}
       <span class="gm-y" title="Population"><span aria-hidden="true">👥</span>${tot.pop}<small>${tot.cities} cities</small></span>
+      <span class="gm-y" title="Luxuries you enjoy: each kind keeps one more citizen content in every city${lux.size ? `. ${[...lux.keys()].map((k) => LUXURIES[k].name).join(", ")}` : ""}"><span aria-hidden="true">💎</span>${lux.size}<small>luxuries</small></span>
     </div>`);
+    if (net < 0 && F.gold + net < 0) h.push(`<div class="gm-warn" style="margin:6px 14px 0">Your treasury runs dry next turn: a unit will be sent home. Build Markets or disband units.</div>`);
+    h.push(`<div class="gm-lens" role="group" aria-label="Map view"><span class="muted">Map</span>${[[null, "Plain"], ["food", "🌾 Food"], ["prod", "⚒️ Prod."], ["gold", "🪙 Gold"]].map(([k, l]) =>
+      `<button class="${view.lens === k ? "on" : ""}" data-lens="${k || ""}">${l}</button>`).join("")}</div>`);
     if (g.over) {
       const W = g.factions[g.over.winner];
       const won = g.over.winner === g.human;
@@ -306,10 +355,12 @@ export function installGame(app) {
       <li><b>Settle.</b> Select your Pioneer (P) and press <i>Found a city</i>. Rivers, lakes and fertile plains make the best sites; the side panel shows each hex's yields.</li>
       <li><b>Build.</b> Click a city to choose what it makes. Builders (B) add farms, mines, qanats and roads; more Pioneers found more cities (each costs 1 population).</li>
       <li><b>Explore and meet.</b> Scouts (S) reveal the land. Meeting another people gives both sides new ideas. Envoys (E) open embassies; Caravans (C) open trade routes.</li>
+      <li><b>Keep people content.</b> A city can keep only so many citizens content: luxuries (🌸🌴🐎 and others, worked with an Estate), Fire Temples and some buildings raise the limit. Unhappy citizens stop growth and cut output. Housing caps size too: fresh water, farms, qanats, Granaries and Aqueducts add room.</li>
+      <li><b>Mind the treasury.</b> Each building costs 1 Gold a turn and units beyond your free ones cost 1 Gold each. You can also buy land next to a city in its close-up screen.</li>
       <li><b>Research.</b> Pick a tech; each era unlocks new buildings. Science comes from population, Libraries and trade.</li>
       <li><b>Grow your culture.</b> Culture widens your borders. Heritage ground (real UNESCO sites) inside your borders counts toward a Culture victory.</li>
       <li><b>Mind the land.</b> Earthquakes follow the real record of each place (Masonry halves the risk). Cities without water risk drought; river cities can flood.</li>
-      <li><b>Win</b> by Science, Culture or Prosperity, or lead on score when the age ends in 1500 CE. Keys: <kbd>Enter</kbd> ends the turn, <kbd>N</kbd> next unit, <kbd>F</kbd> found a city.</li>
+      <li><b>Win</b> by Science, Culture or Prosperity, or lead on score when the age ends in 1500 CE. Keys: <kbd>Enter</kbd> ends the turn, <kbd>N</kbd> next unit, <kbd>F</kbd> found a city, <kbd>S</kbd> sleep or fortify.</li>
     </ol></details>`);
     // victory
     const pr = progress(g, board, g.human);
@@ -346,6 +397,7 @@ export function installGame(app) {
     const ys = Object.entries(y).filter(([, v]) => v).map(([k, v]) => yieldChip(k, v)).join("");
     const bits = [];
     if (t.ore) bits.push(`${esc(t.ore)} ore`);
+    if (t.lux) bits.push(`${LUXURIES[t.lux].emoji} ${LUXURIES[t.lux].name}${g.imp[cell] ? " (worked)" : ": build an Estate here to enjoy it"}`);
     if (t.heritage) bits.push(`heritage ground: ${esc(t.heritage)}`);
     if (g.imp[cell]) bits.push(IMPROVEMENTS[g.imp[cell]].name);
     if (g.road[cell]) bits.push("road");
@@ -384,6 +436,8 @@ export function installGame(app) {
         acts.push(`<span class="muted gm-small">${names.length ? `Click a city of the ${names.map(esc).join(", ")} to open an embassy.` : "No people to send it to: meet a rival first (scouts help), or every people you know already hosts your embassy."}</span>`);
       }
       if (u.type === "scout") acts.push(`<button class="btn" data-act="explore">🧭 Explore on its own</button>`);
+      acts.push(u.sleep ? `<button class="btn" data-act="wake">⏰ Wake</button>`
+        : `<button class="btn" data-act="sleep" title="Skipped by Next unit until you wake it (S)">${u.type === "guard" ? "🛡️ Fortify" : "💤 Sleep"}</button>`);
       acts.push(`<button class="btn" data-act="skip">Skip turn</button><button class="btn" data-act="disband">Disband</button>`);
       h.push(`<div class="gm-acts">${acts.join("")}</div>`);
       if (u.moves > 0) h.push(`<p class="muted gm-small">Click a highlighted hex to move, or any hex further away to travel there over several turns.</p>`);
@@ -391,6 +445,32 @@ export function installGame(app) {
     h.push(tileLine(u.cell));
     h.push(`</section>`);
     return h.join("");
+  }
+
+  function growText(c, y) {
+    if (y.surplus < 0) return `${y.surplus} food: starving`;
+    if (y.mood.unhappy > 0) return `+${y.surplus} food, growth stopped: unhappy`;
+    if (c.pop >= y.mood.housing) return `+${y.surplus} food, growth stopped: no housing`;
+    return y.surplus > 0 ? `+${y.surplus} food, grows in ${Math.max(1, Math.ceil((y.need - c.food) / y.surplus))} turns` : "no spare food";
+  }
+
+  function moodHtml(c, y) {
+    const m = y.mood;
+    const tip = (parts) => parts.map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(", ");
+    return `<div class="gm-mood">
+      <span class="gm-y${m.unhappy ? " neg" : ""}" title="Content: ${esc(tip(m.parts))}"><span aria-hidden="true">${m.unhappy ? "😠" : "😊"}</span>${Math.min(c.pop, m.content)}/${c.pop}<small>${m.unhappy ? `${m.unhappy} unhappy, -${m.unhappy * 10}% output` : `content, room for ${m.content - c.pop}`}</small></span>
+      <span class="gm-y${c.pop >= m.housing ? " neg" : ""}" title="Housing: ${esc(tip(m.housingParts))}"><span aria-hidden="true">🏠</span>${c.pop}/${m.housing}<small>housing</small></span>
+      <span class="gm-y" title="Each building costs 1 Gold a turn; wonders are free"><span aria-hidden="true">🪙</span>${-Object.keys(c.blds).reduce((a, b) => a + upkeepOf(b), 0) || 0}<small>upkeep a turn</small></span>
+    </div>${m.unhappy ? `<p class="gm-small gm-why">${esc(c.name)} stops growing while anyone is unhappy. Work a new luxury with an Estate, or build a Fire Temple.</p>` : c.pop >= m.housing ? `<p class="gm-small gm-why">No room to grow: an Aqueduct, Granary, farms or qanats add housing.</p>` : ""}`;
+  }
+
+  const buildName = (b) => (b.kind === "unit" ? `${UNITS[b.id].emoji} ${UNITS[b.id].name}` : BUILDINGS[b.id].name);
+  function queueHtml(c) {
+    const q = c.queue || [];
+    return `<div class="gm-queue">${q.length ? `<div class="muted gm-small">Then:</div><ol>${q.map((b, k) => `<li><span>${esc(buildName(b))}</span>
+      ${k ? `<button class="gm-x" data-qup="${k}" title="Move up" aria-label="Move up">▲</button>` : ""}<button class="gm-x" data-qdel="${k}" title="Remove" aria-label="Remove">✕</button></li>`).join("")}</ol>` : ""}
+      <div class="gm-qmode" role="group" aria-label="Clicking a choice"><span class="muted">Click a choice to</span>
+        <button class="${queueMode ? "" : "on"}" data-qmode="0">build now</button><button class="${queueMode ? "on" : ""}" data-qmode="1">add to queue</button></div></div>`;
   }
 
   const bonusText = (bn) => Object.entries(bn).map(([k, v]) => `+${v} ${YIELD_INFO[k].emoji}`).join(" ");
@@ -403,8 +483,7 @@ export function installGame(app) {
       <div class="gm-title"><b>${c.capital ? "★ " : ""}${esc(c.name)}</b><span>Population ${c.pop} · ${esc(yearLabel(g.turn))}</span></div>
       <button class="btn" data-act="closecity">◀ Realm</button></div>`);
     h.push(`<div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>`);
-    const turnsGrow = y.surplus > 0 ? Math.ceil((y.need - c.food) / y.surplus) : null;
-    h.push(`<section class="gm-sec"><div class="gm-row"><b>👥 Growth</b><span class="muted">${y.surplus >= 0 ? `+${y.surplus} food, next citizen in ${turnsGrow ?? "∞"} turns` : `${y.surplus} food: starving`}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}
+    h.push(`<section class="gm-sec"><div class="gm-row"><b>👥 Growth</b><span class="muted">${growText(c, y)}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}
       <p class="muted gm-small">The dashed hexes are the ${y.worked.length} your citizens farm and work.</p>`);
     if (c.build) {
       const cost = buildCost(c.build);
@@ -415,6 +494,9 @@ export function installGame(app) {
       h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted">${turns} turns${where}</span></div>${bar(c.prod / cost, YIELD_INFO.prod.color)}`);
       if (hc > 0) h.push(`<button class="gm-link" data-act="hurry" ${F.gold >= hc ? "" : "disabled"}>Finish now for ${hc} 🪙</button>`);
     } else h.push(`<div class="gm-warn">Choose what ${esc(c.name)} builds next.</div>`);
+    h.push(queueHtml(c));
+    h.push(moodHtml(c, y));
+    h.push(`<p class="muted gm-small">Click one of the city's hexes to lock a citizen on it (🔒), again to unlock. Click a gold-edged hex to buy it.</p>`);
     h.push(`</section>`);
     if (view.placing) {
       const B = BUILDINGS[view.placing.bld];
@@ -433,7 +515,7 @@ export function installGame(app) {
     }).join("") || '<p class="muted gm-small">Learn new ideas to unlock buildings.</p>'}</div></section>`);
     h.push(`<section class="gm-sec"><h3>Train</h3><div class="gm-builds">${opts.filter((o) => o.kind === "unit").map((o) => {
       const on = c.build && c.build.kind === "unit" && c.build.id === o.id;
-      return `<button class="gm-opt ${on ? "on" : ""}" data-build="unit:${o.id}" ${o.ok ? "" : "disabled"} title="${esc(UNITS[o.id].desc)}">
+      return `<button class="gm-opt ${on ? "on" : ""}" data-build="unit:${o.id}" ${o.ok || (queueMode && c.build) ? "" : "disabled"} title="${esc(UNITS[o.id].desc)}">
         <b>${UNITS[o.id].emoji} ${esc(o.name)}</b><span>${o.cost} ⚒️</span><small>${esc(o.ok ? UNITS[o.id].desc : o.why)}</small></button>`;
     }).join("")}</div></section>`);
     const blds = Object.keys(c.blds);
@@ -457,8 +539,7 @@ export function installGame(app) {
     const y = cityYields(g, board, c);
     h.push(`<button class="btn gm-open" data-act="opencity">🏛️ Open the city: place buildings</button>`);
     h.push(`<div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>`);
-    const turnsGrow = y.surplus > 0 ? Math.ceil((y.need - c.food) / y.surplus) : null;
-    h.push(`<div class="gm-row"><b>👥 Population ${c.pop}</b><span class="muted">${y.surplus >= 0 ? `+${y.surplus} food, grows in ${turnsGrow ?? "∞"} turns` : `${y.surplus} food: starving`}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}`);
+    h.push(`<div class="gm-row"><b>👥 Population ${c.pop}</b><span class="muted">${growText(c, y)}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}`);
     if (c.build) {
       const cost = buildCost(c.build);
       const name = c.build.kind === "unit" ? UNITS[c.build.id].name : BUILDINGS[c.build.id].name;
@@ -467,10 +548,12 @@ export function installGame(app) {
       h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted">${Math.min(c.prod, cost)}/${cost}, ${turns} turns</span></div>${bar(c.prod / cost, YIELD_INFO.prod.color)}`);
       if (hc > 0) h.push(`<button class="gm-link" data-act="hurry" ${g.factions[g.human].gold >= hc ? "" : "disabled"}>Finish now for ${hc} 🪙</button>`);
     } else h.push(`<div class="gm-warn">Choose what ${esc(c.name)} builds.</div>`);
+    h.push(queueHtml(c));
+    h.push(moodHtml(c, y));
     h.push(`<div class="gm-builds">${buildOptions(g, c).map((o) => {
       const desc = o.kind === "unit" ? UNITS[o.id].desc : BUILDINGS[o.id].desc;
       const on = c.build && c.build.kind === o.kind && c.build.id === o.id;
-      return `<button class="gm-opt ${on ? "on" : ""} ${o.wonder ? "wonder" : ""}" data-build="${o.kind}:${o.id}" ${o.ok ? "" : "disabled"} title="${esc(desc)}">
+      return `<button class="gm-opt ${on ? "on" : ""} ${o.wonder ? "wonder" : ""}" data-build="${o.kind}:${o.id}" ${o.ok || (queueMode && c.build) ? "" : "disabled"} title="${esc(desc)}">
         <b>${o.kind === "unit" ? UNITS[o.id].emoji + " " : o.wonder ? "✦ " : ""}${esc(o.name)}</b><span>${o.cost} ⚒️</span><small>${esc(o.ok ? desc : o.why)}</small></button>`;
     }).join("")}</div>`);
     const blds = Object.keys(c.blds).map((b) => BUILDINGS[b].name);
@@ -499,7 +582,17 @@ export function installGame(app) {
     const u = view.sel?.unit, c = view.cityView || view.sel?.city;
     if (b.dataset.place) { startPlacing(b.dataset.place); return; }
     if (b.dataset.tech) { setResearch(g, g.human, b.dataset.tech); showTechs = false; changed(); return; }
-    if (b.dataset.build) { const [k, id] = b.dataset.build.split(":"); setBuild(g, c, k, id); changed(); return; }
+    if (b.dataset.build) {
+      const [k, id] = b.dataset.build.split(":");
+      if (queueMode && c.build) { if (!queueBuild(g, c, k, id)) app.ui.toast("Already queued, or the queue is full."); }
+      else setBuild(g, c, k, id);
+      changed();
+      return;
+    }
+    if (b.dataset.qdel != null) { unqueue(c, +b.dataset.qdel); changed(); return; }
+    if (b.dataset.qup != null) { raiseQueued(c, +b.dataset.qup); changed(); return; }
+    if (b.dataset.qmode != null) { queueMode = b.dataset.qmode === "1"; render(); return; }
+    if (b.dataset.lens != null) { view.lens = b.dataset.lens || null; app.requestDraw(); render(); return; }
     if (b.dataset.imp && u) { if (improve(g, board, u, b.dataset.imp)) app.ui.toast(`${IMPROVEMENTS[b.dataset.imp].name} built.`); changed(); return; }
     switch (b.dataset.act) {
       case "end": doEndTurn(); break;
@@ -517,6 +610,8 @@ export function installGame(app) {
       }
       case "explore": actUnit(g, board, u); u.auto = true; changed(); break;
       case "skip": u.moves = 0; changed(); nextUnit(); break;
+      case "sleep": u.sleep = true; u.dest = -1; changed(); nextUnit(); break;
+      case "wake": u.sleep = false; changed(); break;
       case "disband": disband(g, u); view.sel = null; changed(); break;
       case "hurry": hurry(g, c); changed(); break;
       case "new": store.clear(); start(true); break;
@@ -530,6 +625,7 @@ export function installGame(app) {
     const k = e.key.toLowerCase();
     if (k === "enter" && !e.target.closest?.("button")) { e.preventDefault(); doEndTurn(); }
     else if (k === "n") { e.preventDefault(); nextUnit(); }
+    else if (k === "s" && view.sel?.unit?.f === g.human) { const u = view.sel.unit; u.sleep = !u.sleep; if (u.sleep) { u.dest = -1; nextUnit(); } changed(); }
     else if (k === "f" && view.sel?.unit?.type === "pioneer") {
       const city = foundCity(g, board, view.sel.unit);
       if (city) select({ city });
@@ -540,7 +636,19 @@ export function installGame(app) {
   function onMove(e) {
     if (app.mode !== "game" || !board || e.pointerType === "touch") return;
     const cell = app.cellAt(e.clientX, e.clientY);
-    if (cell !== view.hover) { view.hover = cell; app.requestDraw(); }
+    if (cell === view.hover) return;
+    view.hover = cell;
+    const u = view.sel?.unit;
+    view.preview = null;
+    if (u && u.f === g.human && !view.cityView && cell >= 0 && cell !== u.cell && g.factions[g.human].seen[cell] && board.tiles[cell].land) {
+      const dist = paths(g, board, u, 400, cell);
+      const cells = pathTo(dist, cell);
+      if (cells?.length) {
+        const cost = dist.get(cell).cost, M = UNITS[u.type].moves;
+        view.preview = { unit: u, cells, turns: cost <= u.moves || (cells.length === 1 && u.moves > 0) ? 0 : Math.ceil((cost - u.moves) / M) };
+      }
+    }
+    app.requestDraw();
   }
 
   // --- mode ------------------------------------------------------------------------------------------------------
@@ -555,7 +663,8 @@ export function installGame(app) {
       dockEl.innerHTML = `<div class="gm-sec"><p>Preparing the land…</p></div>`;
       dockEl.addEventListener("click", onDockClick);
       app.registerOverlay({ id: "game-world", z: 40, draw: (ctx, cam) => drawWorld(ctx, cam, view) });
-      app.registerOverlay({ id: "game-tokens", z: 140, space: "screen", draw: (ctx, cam) => drawTokens(ctx, cam, view) });
+      mini = createMinimap(app, view);
+      app.registerOverlay({ id: "game-tokens", z: 140, space: "screen", draw: (ctx, cam) => { drawTokens(ctx, cam, view); mini?.draw(cam); } });
       const canvas = document.getElementById("map");
       canvas.addEventListener("pointermove", onMove);
       addEventListener("keydown", onKey);
@@ -576,6 +685,8 @@ export function installGame(app) {
       offs.forEach((f) => f());
       offs = [];
       playBtn?.classList.remove("active");
+      mini?.remove();
+      mini = null;
       closeStart();
       view.cityView = null;
       view.placing = null;

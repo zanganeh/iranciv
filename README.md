@@ -93,5 +93,9 @@ Iran data pipeline: this repository.
 Press **Play** (🏺) for an ancient 4X game on the same real terrain: about 3000 BCE to 1500 CE, four invented
 peoples, cities that grow on real farmland and rivers, a 15-tech tree, builders, caravans and trade routes,
 earthquakes drawn from the USGS record, and Science, Culture and Prosperity victories. There is no unit combat.
+Cities have limits that force choices: contentment (raised by luxuries worked with an Estate, temples and some
+buildings), housing (fresh water, farms, qanats, granaries, aqueducts) and gold upkeep for buildings and extra units.
+Each city has a build queue, lockable worked hexes and land you can buy; the map has a fog-aware minimap, food,
+production and gold views, a path preview on hover and suggested city sites for pioneers.
 The code is in `web/js/ext/game/` (`rules.js`, `game.js`, `ai.js`, `render.js`, `ui.js`); games autosave in the
 browser. `node tests/js/game_sim.mjs 3` plays three all-AI games headlessly and checks they finish.

@@ -1,14 +1,14 @@
 // Map overlays for the game: fog of war, borders, improvements and roads (world space, under the labels), and
 // cities, units, selection and move range (screen space, on top). They read `view` (set by ui.js).
 
-import { SQRT3, UNITS } from "./rules.js";
-import { visibleSet, has, cityYields } from "./game.js";
+import { SQRT3, UNITS, BUILDINGS, LUXURIES } from "./rules.js";
+import { visibleSet, has, cityYields, tileYield } from "./game.js";
 import { drawAncientCity, drawUnitToken, drawBuilding, cityRadius, cityDrawR } from "./art.js";
 
 const YIELD_EMOJI = { food: "🌾", prod: "⚒️", gold: "🪙", sci: "📜", cult: "🏺" };
 
 export function createView() {
-  return { g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1 };
+  return { g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1, lens: null, preview: null, settle: null, buy: null };
 }
 
 /** Call after anything in the game changed (move, turn, build). */
@@ -94,20 +94,52 @@ function buildCache(view) {
       }
     }
   }
-  return { version: view.version, fogDark, fogDim, fills, edges, farms, mines, qanats, roads };
+  // map lens: shade every seen land hex by one yield
+  let lens = null;
+  if (view.lens) {
+    lens = [1, 2, 3, 4, 5].map(() => new Path2D());
+    for (let i = 0; i < board.n; i++) {
+      if (!board.tiles[i].land || !seen(i)) continue;
+      const v = Math.min(5, tileYield(g, board, i)[view.lens]);
+      if (v > 0) hexPath(lens[v - 1], grid.cx(i), grid.cy(i), R - 0.6);
+    }
+  }
+  // things worth marking with an icon: luxuries and heritage ground
+  const marks = [];
+  for (let i = 0; i < board.n; i++) {
+    const t = board.tiles[i];
+    if (t.land && seen(i) && (t.lux || t.heritage) && g.cityAt[i] < 0) marks.push(i);
+  }
+  // per-city banner details for my cities
+  const info = new Map();
+  for (const c of g.cities) {
+    if (c.f !== me) continue;
+    const y = cityYields(g, board, c);
+    const cost = c.build ? (c.build.kind === "unit" ? UNITS[c.build.id].cost : BUILDINGS[c.build.id].cost) : 0;
+    info.set(c.id, {
+      build: c.build ? (c.build.kind === "unit" ? UNITS[c.build.id].emoji : "⚒️") : "⚒️–",
+      bturns: c.build ? (y.prod > 0 ? Math.max(1, Math.ceil((cost - c.prod) / y.prod)) : "∞") : "",
+      grow: y.mood.unhappy > 0 ? "😠" : c.pop >= y.mood.housing ? "🏠" : y.surplus > 0 ? `👥${Math.ceil((y.need - c.food) / y.surplus)}` : y.surplus < 0 ? "⚠️" : "👥∞",
+    });
+  }
+  return { version: view.version, lensKey: view.lens, fogDark, fogDim, fills, edges, farms, mines, qanats, roads, lens, marks, info };
 }
 
 /** World-space layer: territory, improvements, fog. */
 export function drawWorld(ctx, cam, view) {
   if (!view.g) return;
-  if (!view.cache || view.cache.version !== view.version) view.cache = buildCache(view);
+  if (!view.cache || view.cache.version !== view.version || view.cache.lensKey !== view.lens) view.cache = buildCache(view);
   const c = view.cache;
   const { g } = view;
   const px = 1 / cam.scale; // one screen pixel in km
   g.factions.forEach((F, f) => {
-    ctx.fillStyle = hexToRgba(F.color, 0.2);
+    ctx.fillStyle = hexToRgba(F.color, view.lens ? 0.08 : 0.2);
     ctx.fill(c.fills[f]);
   });
+  if (c.lens) {
+    const col = LENS_COLOR[view.lens];
+    c.lens.forEach((p, k) => { ctx.fillStyle = hexToRgba(col, 0.12 + k * 0.15); ctx.fill(p); });
+  }
   ctx.lineCap = "round";
   ctx.strokeStyle = "rgba(120,86,48,0.9)";
   ctx.lineWidth = Math.max(1.2, 2.2 * px);
@@ -170,6 +202,8 @@ export function drawWorld(ctx, cam, view) {
   ctx.fill(c.fogDim);
 }
 
+const LENS_COLOR = { food: "#7fbf3f", prod: "#d9823b", gold: "#f2c94c", sci: "#4fa3e0", cult: "#b07ce0" };
+
 // The close-up city screen: dim the land outside the city, mark the worked hexes and the building sites on offer.
 function drawCityFocus(ctx, cam, view, px) {
   const { g, board } = view;
@@ -203,6 +237,27 @@ function drawCityFocus(ctx, cam, view, px) {
     ctx.strokeStyle = "rgba(255,246,210,0.75)";
     ctx.lineWidth = Math.max(1.5, 2.5 * px);
     ctx.setLineDash([6 * px, 4 * px]);
+    ctx.stroke(p);
+    ctx.setLineDash([]);
+  }
+  // locked hexes: a solid ring
+  for (const i of c.locked || []) {
+    if (!worked.includes(i)) continue;
+    const p = new Path2D();
+    hexPath(p, grid.cx(i), grid.cy(i), R - 2.2);
+    ctx.strokeStyle = "#fff6d2";
+    ctx.lineWidth = Math.max(2, 3 * px);
+    ctx.stroke(p);
+  }
+  // land for sale next to the borders
+  if (!view.placing) for (const o of view.buy || []) {
+    const p = new Path2D();
+    hexPath(p, grid.cx(o.cell), grid.cy(o.cell), R - 1.5);
+    ctx.fillStyle = "rgba(242,201,76,0.10)";
+    ctx.fill(p);
+    ctx.strokeStyle = view.hover === o.cell ? "#fff" : "rgba(242,201,76,0.6)";
+    ctx.setLineDash([3 * px, 3 * px]);
+    ctx.lineWidth = Math.max(1, 1.5 * px);
     ctx.stroke(p);
     ctx.setLineDash([]);
   }
@@ -243,8 +298,102 @@ export function drawTokens(ctx, cam, view) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  // cities
+  // the path a unit would take to the hovered hex
+  const pv = view.preview;
+  if (pv && sel?.unit && pv.unit === sel.unit && pv.cells.length) {
+    ctx.strokeStyle = "rgba(255,240,180,0.95)";
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([2, 5]);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(sx(board.tiles[sel.unit.cell].x), sy(board.tiles[sel.unit.cell].y));
+    for (const i of pv.cells) ctx.lineTo(sx(board.tiles[i].x), sy(board.tiles[i].y));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const end = board.tiles[pv.cells[pv.cells.length - 1]];
+    const label = pv.turns === 0 ? "this turn" : `${pv.turns} turn${pv.turns > 1 ? "s" : ""}`;
+    ctx.font = "700 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const w = ctx.measureText(label).width + 12;
+    ctx.fillStyle = "rgba(20,22,28,0.88)";
+    roundRect(ctx, sx(end.x) - w / 2, sy(end.y) - 26, w, 18, 9);
+    ctx.fill();
+    ctx.fillStyle = "#fff0b4";
+    ctx.fillText(label, sx(end.x), sy(end.y) - 17);
+  }
   ctx.textBaseline = "middle";
+  // luxuries and heritage ground
+  if (!small && view.cache?.marks) {
+    const fs = Math.max(11, Math.min(20, board.grid.R * s * 0.42));
+    ctx.font = `${fs}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    for (const i of view.cache.marks) {
+      const t = board.tiles[i];
+      const x = sx(t.x) + board.grid.R * s * 0.36, y = sy(t.y) - board.grid.R * s * 0.36;
+      if (!onScreen(x, y)) continue;
+      ctx.globalAlpha = t.lux && !g.imp[i] ? 0.75 : 1;
+      ctx.fillText(t.lux ? LUXURIES[t.lux].emoji : "🏛️", x, y);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // suggested city sites for a selected pioneer
+  for (const [k, i] of (view.settle || []).entries()) {
+    const t = board.tiles[i];
+    const x = sx(t.x), y = sy(t.y);
+    if (!onScreen(x, y)) continue;
+    ctx.beginPath();
+    ctx.arc(x, y, small ? 8 : k === 0 ? 15 : 12, 0, Math.PI * 2);
+    ctx.fillStyle = k === 0 ? "rgba(236,208,142,0.95)" : "rgba(236,208,142,0.6)";
+    ctx.fill();
+    ctx.fillStyle = "#2a2216";
+    ctx.font = `700 ${small ? 10 : k === 0 ? 17 : 14}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText("★", x, y + 0.5);
+    if (k === 0 && !small) {
+      ctx.font = "700 11px system-ui, sans-serif";
+      const w = ctx.measureText("Good site").width + 10;
+      ctx.fillStyle = "rgba(20,22,28,0.85)";
+      roundRect(ctx, x - w / 2, y + 17, w, 16, 8);
+      ctx.fill();
+      ctx.fillStyle = "#ecd08e";
+      ctx.fillText("Good site", x, y + 25.5);
+    }
+  }
+  // yields on the city's own hexes (close-up city screen)
+  if (view.cityView && !view.placing) {
+    const cv = view.cityView;
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const built = new Set(Object.values(cv.sites || {}));
+    for (const i of cv.tiles) {
+      if (i === cv.cell || built.has(i)) continue;
+      const y = tileYield(g, board, i);
+      const label = ["food", "prod", "gold", "sci", "cult"].filter((k) => y[k]).map((k) => `${y[k]}${YIELD_EMOJI[k]}`).join(" ");
+      if (!label) continue;
+      const x = sx(board.tiles[i].x), yy = sy(board.tiles[i].y) + board.grid.R * s * 0.45;
+      const w = ctx.measureText(label).width + 8;
+      ctx.fillStyle = "rgba(20,22,28,0.72)";
+      roundRect(ctx, x - w / 2, yy - 8, w, 16, 8);
+      ctx.fill();
+      ctx.fillStyle = "#f4efe2";
+      ctx.fillText(label, x, yy + 0.5);
+      if ((cv.locked || []).includes(i)) ctx.fillText("🔒", x, sy(board.tiles[i].y) - board.grid.R * s * 0.45);
+    }
+    ctx.font = "700 12px system-ui, sans-serif";
+    const gold = g.factions[g.human].gold;
+    for (const o of view.buy || []) {
+      const x = sx(board.tiles[o.cell].x), yy = sy(board.tiles[o.cell].y);
+      const label = `Buy ${o.cost}🪙`;
+      const w = ctx.measureText(label).width + 10;
+      ctx.fillStyle = gold >= o.cost ? "rgba(70,56,18,0.9)" : "rgba(30,28,24,0.8)";
+      roundRect(ctx, x - w / 2, yy - 9, w, 18, 9);
+      ctx.fill();
+      ctx.fillStyle = gold >= o.cost ? "#ffe08a" : "#9a917c";
+      ctx.fillText(label, x, yy + 0.5);
+    }
+  }
+  // cities
   for (const c of g.cities) {
     if (!seen(c.cell)) continue;
     const t = board.tiles[c.cell];
@@ -291,6 +440,20 @@ export function drawTokens(ctx, cam, view) {
       ctx.fillStyle = "#ecd08e";
       ctx.textAlign = "center";
       ctx.fillText("★", bx + tw + pw + 13, by + h / 2 + 0.5);
+      ctx.textAlign = "left";
+    }
+    // my cities: what is being made and when the city grows
+    const inf = view.cache?.info?.get(c.id);
+    if (inf && !small) {
+      ctx.font = "600 11px system-ui, sans-serif";
+      const line = `${inf.build}${inf.bturns}  ${inf.grow}`;
+      const lw = ctx.measureText(line).width + 10;
+      ctx.fillStyle = "rgba(20,22,28,0.72)";
+      roundRect(ctx, x - lw / 2, by + h + 1, lw, 15, 4);
+      ctx.fill();
+      ctx.fillStyle = "#e8dcc0";
+      ctx.textAlign = "center";
+      ctx.fillText(line, x, by + h + 9);
       ctx.textAlign = "left";
     }
   }
