@@ -1,0 +1,11 @@
+data/raw/
+data/interim/
+.venv/
+__pycache__/
+*.pyc
+*.part
+.DS_Store
+.claude/
+out/
+dist/
+usaciv.zip
