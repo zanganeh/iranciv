@@ -63,20 +63,20 @@ export function statDefs(nation) {
     yield: y,
     unit: y.unit,
     description: y.description || "",
-    source: y.key === "gold" ? nation.gdp_vintage || nation.vintage || "" : nation.vintage || "",
+    source: y.source || (y.key === "gold" ? nation.gdp_vintage || nation.vintage || "" : nation.vintage || ""),
     value: y.key === "gold" ? n.gdp ?? n.yields?.gold ?? null : n.yields?.[y.key] ?? null,
   }));
   return [
     {
       key: "population", label: "Population", name: "Population", color: "#e8dcc0", iconId: "pop", emoji: "👥", unit: "people",
-      description: "Residents (ACS B01003).", source: nation?.vintage || "", value: n.population ?? null,
+      description: "Residents at the census.", source: nation?.vintage || "", value: n.population ?? null,
     },
     ...yields,
-    {
+    n.unemployment != null && {
       key: "unemployment", label: "Unemployment", name: "Unemployment rate", color: "#e8dcc0", iconId: "unemployment", emoji: "😐",
       unit: "rate", description: "Unemployed ÷ civilian labour force (ACS B23025).", source: nation?.vintage || "", value: n.unemployment ?? null,
     },
-  ];
+  ].filter(Boolean);
 }
 
 const industryLabel = (nation, k, gdp = false) => {
@@ -294,13 +294,13 @@ function reportJobs(rep, def, nation, n, st, metros) {
   const fmtLq = (v) => `×${v.toFixed(2)}`;
   const exactLq = (v) => `×${v.toFixed(3)}`;
   rep.boards.modes = [
-    { id: "abs", label: "Most workers", states: rank(st, y), metros: rank(metros, y) },
-    {
+    { id: "abs", label: def.unit === "workers" ? "Most workers" : "Largest", states: rank(st, y), metros: rank(metros, y) },
+    nShare && {
       id: "rel", label: "Specialisation",
       hint: `Share of the area's employed in ${def.label.toLowerCase()} jobs ÷ the U.S. share (${pct(nShare)}); cities of ${compact(METRO_MIN)}+ people.`,
       states: rank(st, lq, { fmt: fmtLq, exact: exactLq, subOf: shareSub }), metros: rank(metros, lq, { fmt: fmtLq, exact: exactLq, subOf: shareSub, min: METRO_MIN }),
     },
-  ];
+  ].filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -415,7 +415,7 @@ export function initYieldReports(opts) {
       ${modes.length ? `<section class="yr-sec"><h3>Leaderboards</h3>
         <div class="yr-controls">
           <div class="yr-tabs" role="tablist" aria-label="Areas">
-            <button role="tab" id="yr-tab-states" data-tab="states" aria-controls="yr-board" aria-selected="${tab === "states"}" tabindex="${tab === "states" ? 0 : -1}" ${hasStates ? "" : "disabled"}>States</button>
+            <button role="tab" id="yr-tab-states" data-tab="states" aria-controls="yr-board" aria-selected="${tab === "states"}" tabindex="${tab === "states" ? 0 : -1}" ${hasStates ? "" : "disabled"}>Provinces</button>
             <button role="tab" id="yr-tab-metros" data-tab="metros" aria-controls="yr-board" aria-selected="${tab === "metros"}" tabindex="${tab === "metros" ? 0 : -1}" ${hasMetros ? "" : "disabled"}>Cities</button>
           </div>
           ${modes.length > 1 ? `<div class="yr-modes" role="group" aria-label="Ranking">${modes

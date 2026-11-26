@@ -12,6 +12,7 @@ HEX_AREA_KM2 = 3 * 3 ** 0.5 / 2 * 15.0 ** 2  # pointy-top hex of radius 15 km
 YIELDS = [
     {
         "key": "food",
+        "source": "ESA WorldCover 2021",
         "icon": "y-food",
         "emoji": "🌾",
         "label": "Food",
@@ -23,6 +24,7 @@ YIELDS = [
     },
     {
         "key": "production",
+        "source": "WRI Global Power Plant Database v1.3 (2021)",
         "icon": "y-production",
         "emoji": "⚙️",
         "label": "Production",
@@ -46,6 +48,7 @@ YIELDS = [
     },
     {
         "key": "science",
+        "source": "Wikidata, queried 2026-11-26",
         "icon": "y-science",
         "emoji": "🔬",
         "label": "Science",
@@ -57,6 +60,7 @@ YIELDS = [
     },
     {
         "key": "culture",
+        "source": "UNESCO World Heritage List via Wikidata, queried 2026-11-26",
         "icon": "y-culture",
         "emoji": "🎭",
         "label": "Culture",
