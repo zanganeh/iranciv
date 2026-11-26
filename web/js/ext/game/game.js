@@ -9,7 +9,7 @@ import {
   canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
 } from "./rules.js";
 
-export const WIN = { heritage: 5, culture: 2600, gold: 12000, pop: 110 };
+export const WIN = { heritage: 4, culture: 2000, gold: 11000, pop: 100 };
 const CITY_MIN_DIST = 4; // hexes between city centres
 const CLAIM_RADIUS = 3; // how far a city's borders can grow
 
@@ -45,7 +45,7 @@ export function newGame(board, { seed = (Date.now() & 0x7fffffff), peoples = 4, 
     const f = {
       k, id: p.id, name: p.name, color: p.color, leaning: p.leaning, ai: k !== human,
       techs: {}, research: null, progress: {}, gold: 10, goldEarned: 0, culture: 0, nameIdx: 0,
-      seen: new Uint8Array(n), met: {}, wonders: [], start: starts[k],
+      seen: new Uint8Array(n), met: {}, embassy: {}, wonders: [], start: starts[k],
     };
     g.factions.push(f);
     addUnit(g, k, "pioneer", starts[k]);
@@ -332,7 +332,7 @@ function blockedFor(g, u) {
 /** Can unit `u` enter `cell`? `final`: the last step (a caravan may enter a city there). */
 function enterable(g, board, u, cell, final, blocked = blockedFor(g, u)) {
   if (moveCost(board.tiles[cell]) === Infinity || blocked.has(cell)) return false;
-  if (blocked.has(-1 - cell) && !(final && u.type === "caravan")) return false;
+  if (blocked.has(-1 - cell) && !(final && (u.type === "caravan" || u.type === "envoy"))) return false;
   return true;
 }
 
@@ -434,9 +434,31 @@ function advance(g, board, u, dist = null) {
 }
 
 function arrive(g, board, u) {
-  if (u.type !== "caravan") return;
   const c = cityAt(g, u.cell);
-  if (c) openRoute(g, board, u, c);
+  if (!c) return;
+  if (u.type === "caravan") openRoute(g, board, u, c);
+  else if (u.type === "envoy") openEmbassy(g, u, c);
+}
+
+/** Rival peoples the faction has met but has no embassy with yet. */
+export function embassyTargets(g, f) {
+  const F = g.factions[f];
+  return g.cities.filter((c) => c.f !== f && F.met[c.f] != null && !F.embassy?.[c.f]);
+}
+
+function openEmbassy(g, u, c) {
+  const F = g.factions[u.f], O = g.factions[c.f];
+  F.embassy = F.embassy || {};
+  if (c.f === u.f || F.embassy[c.f]) return false;
+  F.embassy[c.f] = g.turn;
+  for (const X of [F, O]) {
+    X.culture += 20;
+    if (X.research) X.progress[X.research] = (X.progress[X.research] || 0) + 20;
+  }
+  removeUnit(g, u);
+  logMsg(g, u.f, `Your envoy reached ${c.name}: an embassy with the ${O.name} (+20 Science and Culture, then +2 Science a turn).`, c.cell);
+  logMsg(g, c.f, `A ${F.name} envoy arrived in ${c.name} and opened an embassy (+20 Science and Culture).`, c.cell);
+  return true;
 }
 
 // --- unit actions ------------------------------------------------------------------------------------------------
@@ -547,7 +569,7 @@ export function endTurn(g, board, ai = null) {
   for (const F of g.factions) if (F.ai && ai) ai(g, board, F.k);
   for (const F of g.factions) {
     if (!F.research) autoResearch(g, F.k);
-    const sci = processCities(g, board, F.k);
+    const sci = processCities(g, board, F.k) + 2 * Object.keys(F.embassy || {}).length;
     research(g, F.k, sci);
   }
   events(g, board);
@@ -621,10 +643,10 @@ const LEAN_TECH = {
   scholar: ["pottery", "writing", "mysticism", "mathematics", "philosophy", "astronomy", "paper"],
 };
 const LEAN_BLD = {
-  builder: ["granary", "workshop", "library", "aqueduct", "market", "temple", "academy", "observatory"],
+  builder: ["granary", "workshop", "library", "aqueduct", "market", "temple", "garden", "academy", "observatory"],
   trader: ["market", "granary", "caravanserai", "bazaar", "library", "temple", "wisdom", "observatory"],
-  expander: ["granary", "aqueduct", "bimaristan", "workshop", "market", "library", "temple"],
-  scholar: ["library", "granary", "academy", "wisdom", "observatory", "temple", "market"],
+  expander: ["granary", "aqueduct", "bimaristan", "workshop", "market", "library", "temple", "garden"],
+  scholar: ["library", "granary", "temple", "academy", "wisdom", "garden", "observatory", "market"],
 };
 
 export function autoResearch(g, f) {
@@ -651,6 +673,7 @@ export function autoBuild(g, c) {
   let choice = null;
   if (mine.length + count("pioneer") < wantCities && count("pioneer") < 1 + (mine.length >= 3 ? 1 : 0) && c.pop >= 3) choice = pick("unit", "pioneer");
   if (!choice && count("builder") < Math.ceil(mine.length / 2) + (F.leaning === "builder" ? 1 : 0)) choice = pick("unit", "builder");
+  if (!choice && has(g, c.f, "writing") && count("envoy") < 1 && new Set(embassyTargets(g, c.f).map((x) => x.f)).size > 0) choice = pick("unit", "envoy");
   if (!choice && has(g, c.f, "trade") && c.routes.length < maxRoutes(c) && count("caravan") < 1 + (F.leaning === "trader" ? 1 : 0) && (g.turn + c.id) % 3 === 0) choice = pick("unit", "caravan");
   if (!choice) for (const b of LEAN_BLD[F.leaning] || []) if ((choice = pick("bld", b))) break;
   if (!choice) choice = opts.find((o) => o.kind === "bld") || pick("unit", "builder") || opts[0];
@@ -673,6 +696,13 @@ function events(g, board) {
         c.prod = Math.floor(c.prod / 2);
         logMsg(g, c.f, `An earthquake struck ${c.name}${lost ? ", and 1 population was lost" : ""}. Half its work in progress was lost.${has(g, c.f, "masonry") ? "" : " Masonry halves the risk."}`, c.cell);
       }
+    }
+    // Floods: river cities sometimes lose their stores; a farm on the river may be washed out.
+    if (board.tiles[c.cell].river && rand(g) < 0.02) {
+      c.food = Math.floor(c.food / 2);
+      const farm = c.tiles.find((i) => board.tiles[i].river && g.imp[i] === "farm");
+      if (farm != null && rand(g) < 0.5) { g.imp[farm] = null; syncBoard(g, board); }
+      logMsg(g, c.f, `The river flooded at ${c.name}: half the stored food was lost${farm != null && !g.imp[farm] ? " and a farm was washed out" : ""}.`, c.cell);
     }
     // Drought: cities with no river, lake or qanat inside their borders.
     const watered = c.tiles.some((i) => board.tiles[i].fresh || g.imp[i] === "qanat");

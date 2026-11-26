@@ -81,3 +81,8 @@ body.game-on #city-panel, body.game-on .search, body.game-on #btn-res { display:
 .gm-over p { margin: 6px 0; }
 .gm-foot { display: flex; justify-content: space-between; padding: 12px 14px 0; }
 .gm-note { padding: 4px 14px 0; font-size: 11px; margin: 0; }
+
+.gm-guide summary { cursor: pointer; font: bold 13px var(--serif); letter-spacing: .08em; text-transform: uppercase; color: var(--gold); }
+.gm-guide ol { margin: 6px 0 2px; padding-left: 18px; font-size: 12px; }
+.gm-guide li { margin: 4px 0; }
+.gm-guide kbd { font-size: 10.5px; padding: 0 4px; border: 1px solid rgba(201,164,92,.5); border-radius: 3px; }

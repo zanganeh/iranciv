@@ -44,7 +44,7 @@ export const TECHS = [
   { id: "pottery", name: "Pottery", era: 0, cost: 30, req: [], unlocks: "Granary" },
   { id: "irrigation", name: "Irrigation", era: 0, cost: 35, req: [], unlocks: "Farms away from rivers" },
   { id: "bronze", name: "Bronze Working", era: 0, cost: 40, req: [], unlocks: "Mines, Guard" },
-  { id: "writing", name: "Writing", era: 0, cost: 50, req: ["pottery"], unlocks: "Library" },
+  { id: "writing", name: "Writing", era: 0, cost: 50, req: ["pottery"], unlocks: "Library, Envoy" },
   { id: "trade", name: "Trade", era: 1, cost: 165, req: ["pottery", "bronze"], unlocks: "Market, Caravan" },
   { id: "qanat", name: "Qanats", era: 1, cost: 180, req: ["irrigation", "bronze"], unlocks: "Qanats on dry land" },
   { id: "masonry", name: "Masonry", era: 1, cost: 155, req: ["bronze"], unlocks: "Workshop; halves earthquake damage risk" },
@@ -53,7 +53,7 @@ export const TECHS = [
   { id: "roads", name: "Royal Roads", era: 1, cost: 200, req: ["trade", "masonry"], unlocks: "Roads, Caravanserai" },
   { id: "philosophy", name: "Philosophy", era: 2, cost: 780, req: ["mysticism", "mathematics"], unlocks: "Academy" },
   { id: "paper", name: "Paper", era: 2, cost: 780, req: ["writing", "trade"], unlocks: "House of Wisdom" },
-  { id: "astronomy", name: "Astronomy", era: 2, cost: 990, req: ["philosophy", "mathematics"], unlocks: "Observatory" },
+  { id: "astronomy", name: "Astronomy", era: 2, cost: 1400, req: ["philosophy", "mathematics"], unlocks: "Observatory" },
   { id: "banking", name: "Banking", era: 2, cost: 900, req: ["roads", "paper"], unlocks: "Bazaar" },
   { id: "medicine", name: "Medicine", era: 2, cost: 900, req: ["philosophy", "qanat"], unlocks: "Bimaristan" },
 ];
@@ -65,6 +65,7 @@ export const UNITS = {
   builder: { name: "Builder", emoji: "⛏️", letter: "B", cost: 22, moves: 2, sight: 1, charges: 3, desc: "Builds farms, mines, qanats and roads (3 uses)." },
   scout: { name: "Scout", emoji: "🧭", letter: "S", cost: 12, moves: 3, sight: 3, desc: "Explores. Sees far." },
   guard: { name: "Guard", emoji: "🛡️", letter: "G", cost: 20, moves: 1, sight: 2, tech: "bronze", desc: "Holds its hex: no rival unit can enter it, and no rival may found a city next to it." },
+  envoy: { name: "Envoy", emoji: "🕊️", letter: "E", cost: 25, moves: 3, sight: 2, tech: "writing", desc: "Opens an embassy: move it into a rival city. Both peoples gain Science and Culture, and you get +2 Science a turn from then on." },
   caravan: { name: "Caravan", emoji: "🐪", letter: "C", cost: 30, moves: 2, sight: 1, tech: "trade", desc: "Open a trade route: move it into another city (yours or a rival's) for lasting Gold in both." },
 };
 
@@ -81,7 +82,8 @@ export const BUILDINGS = {
   wisdom: { name: "House of Wisdom", cost: 100, tech: "paper", yields: { sci: 2, cult: 2 }, desc: "+2 Science, +2 Culture" },
   bazaar: { name: "Bazaar", cost: 100, tech: "banking", yields: { gold: 3 }, pct: { gold: 0.25 }, desc: "+3 Gold, +25% Gold" },
   bimaristan: { name: "Bimaristan", cost: 90, tech: "medicine", yields: { food: 2 }, growth: 0.25, desc: "+2 Food, cities grow 25% faster" },
-  observatory: { name: "Great Observatory", cost: 400, tech: "astronomy", wonder: true, yields: { sci: 6 }, desc: "Wonder: +6 Science. Needed for a Science victory." },
+  garden: { name: "Garden of Four Streams", cost: 260, tech: "mysticism", wonder: true, yields: { cult: 5, food: 2 }, desc: "Wonder: +5 Culture, +2 Food. A walled garden split by four water channels." },
+  observatory: { name: "Great Observatory", cost: 600, tech: "astronomy", wonder: true, yields: { sci: 6 }, desc: "Wonder: +6 Science. Needed for a Science victory." },
 };
 
 // --- improvements -------------------------------------------------------------------------------------------------

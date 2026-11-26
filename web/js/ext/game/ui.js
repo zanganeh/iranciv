@@ -7,7 +7,7 @@ import {
 import {
   newGame, endTurn, save, load, cityYields, factionTotals, availableTechs, setResearch, buildOptions, setBuild,
   buildCost, hurryCost, hurry, canFound, foundCity, reachable, orderMove, improveOptions, improve, routeTargets,
-  unitsAt, cityAt, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
+  unitsAt, cityAt, embassyTargets, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
 } from "./game.js";
 import { aiTurn, actUnit } from "./ai.js";
 import { createView, touch, drawWorld, drawTokens } from "./render.js";
@@ -83,9 +83,9 @@ export function installGame(app) {
     // Order the selected unit to move (or a caravan into a city).
     if (u && u.f === g.human && cell !== u.cell && !here.length && board.tiles[cell].land && F.seen[cell] && !g.over) {
       const c = cityAt(g, cell);
-      if (!c || u.type === "caravan" || c.f === g.human) {
+      if (!c || u.type === "caravan" || u.type === "envoy" || c.f === g.human) {
         if (orderMove(g, board, u, cell)) {
-          if (!g.units.includes(u)) app.ui.toast("Trade route opened.");
+          if (!g.units.includes(u)) app.ui.toast(u.type === "envoy" ? "Embassy opened." : "Trade route opened.");
           changed();
         } else app.ui.toast("No way there.");
         return true;
@@ -124,7 +124,7 @@ export function installGame(app) {
       for (const u of unitsOf(g, g.human)) if (u.auto && u.moves > 0) actUnit(g, board, u);
       busy = false;
       const news = g.log.slice(before).filter((e) => e.f === g.human || e.f === -1);
-      const big = news.find((e) => /learned|won|age ends|earthquake|Drought|First contact|completed the/.test(e.text));
+      const big = news.find((e) => /learned|won|age ends|earthquake|Drought|flooded|First contact|embassy|completed the/.test(e.text));
       if (big) app.ui.toast(big.text);
       if (g.over) store.clear();
       changed();
@@ -183,6 +183,15 @@ export function installGame(app) {
       <div class="gm-known">${TECHS.map((t) => `<span class="${F.techs[t.id] ? "on" : ""}" title="${esc(t.name)}: ${esc(t.unlocks)}">${esc(t.name)}</span>`).join("")}</div></section>`);
     // selection
     h.push(selectionHtml());
+    h.push(`<details class="gm-sec gm-guide" ${g.turn < 3 ? "open" : ""}><summary>How to play</summary><ol>
+      <li><b>Settle.</b> Select your Pioneer (P) and press <i>Found a city</i>. Rivers, lakes and fertile plains make the best sites; the side panel shows each hex's yields.</li>
+      <li><b>Build.</b> Click a city to choose what it makes. Builders (B) add farms, mines, qanats and roads; more Pioneers found more cities (each costs 1 population).</li>
+      <li><b>Explore and meet.</b> Scouts (S) reveal the land. Meeting another people gives both sides new ideas. Envoys (E) open embassies; Caravans (C) open trade routes.</li>
+      <li><b>Research.</b> Pick a tech; each era unlocks new buildings. Science comes from population, Libraries and trade.</li>
+      <li><b>Grow your culture.</b> Culture widens your borders. Heritage ground (real UNESCO sites) inside your borders counts toward a Culture victory.</li>
+      <li><b>Mind the land.</b> Earthquakes follow the real record of each place (Masonry halves the risk). Cities without water risk drought; river cities can flood.</li>
+      <li><b>Win</b> by Science, Culture or Prosperity, or lead on score when the age ends in 1500 CE. Keys: <kbd>Enter</kbd> ends the turn, <kbd>N</kbd> next unit, <kbd>F</kbd> found a city.</li>
+    </ol></details>`);
     // victory
     const pr = progress(g, board, g.human);
     h.push(`<section class="gm-sec"><h3>Paths to victory</h3>
@@ -205,7 +214,7 @@ export function installGame(app) {
     const sel = view.sel;
     if (!sel) {
       return `<section class="gm-sec gm-sel"><h3>Orders</h3><p class="muted gm-small">Click one of your units (the round tokens) to move it, or a city to run it.
-        Pioneers found cities, scouts explore, builders improve land, caravans open trade routes.</p></section>`;
+        Pioneers found cities, scouts explore, builders improve land, envoys open embassies, caravans open trade routes.</p></section>`;
     }
     if (sel.unit) return unitHtml(sel.unit);
     if (sel.city) return cityHtml(sel.city);
@@ -249,6 +258,11 @@ export function installGame(app) {
       if (u.type === "caravan") {
         const ts = routeTargets(g, board, u);
         acts.push(`<span class="muted gm-small">${ts.length ? `Click a city to send it: ${ts.slice(0, 6).map((c) => esc(c.name)).join(", ")}${ts.length > 6 ? "…" : ""}. Cities further away pay more.` : "No city to trade with yet: meet a rival or found a city at least 5 hexes away."}</span>`);
+      }
+      if (u.type === "envoy") {
+        const ts = embassyTargets(g, g.human);
+        const names = [...new Map(ts.map((c) => [c.f, g.factions[c.f].name])).values()];
+        acts.push(`<span class="muted gm-small">${names.length ? `Click a city of the ${names.map(esc).join(", ")} to open an embassy.` : "No people to send it to: meet a rival first (scouts help), or every people you know already hosts your embassy."}</span>`);
       }
       if (u.type === "scout") acts.push(`<button class="btn" data-act="explore">🧭 Explore on its own</button>`);
       acts.push(`<button class="btn" data-act="skip">Skip turn</button><button class="btn" data-act="disband">Disband</button>`);

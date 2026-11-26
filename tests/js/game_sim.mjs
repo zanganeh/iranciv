@@ -41,7 +41,7 @@ for (let s = 1; s <= games; s++) {
   check(g.units.every((u) => board.tiles[u.cell].land), "all units on land");
   const quakesLog = g.log.filter((e) => /earthquake/.test(e.text)).length;
   console.log(`  events: ${quakesLog} quakes, ${g.log.filter((e) => /Drought/.test(e.text)).length} droughts, ` +
-    `${g.log.filter((e) => /trade route from/.test(e.text)).length} trade routes, ${g.factions.reduce((a, F) => a + Object.keys(F.met).length, 0) / 2} contacts`);
+    `${g.log.filter((e) => /trade route from/.test(e.text)).length} trade routes, ${g.factions.reduce((a, F) => a + Object.keys(F.met).length, 0) / 2} contacts, ${g.factions.reduce((a, F) => a + Object.keys(F.embassy || {}).length, 0)} embassies, ${g.log.filter((e) => /flooded/.test(e.text)).length} floods`);
 }
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
 console.log("ok");

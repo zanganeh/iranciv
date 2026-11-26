@@ -3,7 +3,7 @@
 
 import { UNITS, IMPROVEMENTS, hexDist, ring, siteScore, canImprove } from "./rules.js";
 import {
-  has, citiesOf, canFound, foundCity, paths, pathTo, orderMove, improve, routeTargets, factionOf, autoResearch,
+  has, citiesOf, embassyTargets, canFound, foundCity, paths, pathTo, orderMove, improve, routeTargets, factionOf, autoResearch,
   autoBuild, cityYields, disband,
 } from "./game.js";
 
@@ -29,6 +29,7 @@ export function actUnit(g, board, u, worked = null) {
     case "scout": return scout(g, board, u);
     case "builder": return builder(g, board, u, worked);
     case "caravan": return caravan(g, board, u);
+    case "envoy": return envoy(g, board, u);
     default: return;
   }
 }
@@ -136,6 +137,17 @@ function caravan(g, board, u) {
     if (v > bestV) { bestV = v; best = c; }
   }
   if (best) orderMove(g, board, u, best.cell);
+}
+
+function envoy(g, board, u) {
+  if (u.dest >= 0) return;
+  const targets = embassyTargets(g, u.f);
+  if (!targets.length) {
+    if (g.turn - (u.born ?? (u.born = g.turn)) > 15) disband(g, u);
+    return;
+  }
+  targets.sort((a, b) => hexDist(board.grid, u.cell, a.cell) - hexDist(board.grid, u.cell, b.cell));
+  for (const c of targets.slice(0, 3)) if (orderMove(g, board, u, c.cell)) return;
 }
 
 function wander(g, board, u) {
