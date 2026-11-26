@@ -8,6 +8,7 @@ to one commit so the content cannot change under the same URL.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import math
 
 from ..core.geo import geojson_rings
@@ -40,6 +41,11 @@ def _en(tags: dict, suffixes: tuple[str, ...]) -> str:
     return name.strip()
 
 
+# OSM spellings -> the spellings used by Wikidata/Wikipedia and data/manual.
+NAME_FIX = {"Chaharmahal and Bakhtiyari": "Chaharmahal and Bakhtiari",
+            "Kohgiluye and Buyer Ahmad": "Kohgiluyeh and Boyer-Ahmad"}
+
+
 class IranBoundaries(Source):
     info = SourceInfo(
         id="iran_boundaries",
@@ -67,6 +73,8 @@ class IranBoundaries(Source):
             return json.load(f)["features"]
 
     def process(self):
+        manual = Path(__file__).resolve().parents[2] / "data" / "manual" / "province_gdp_share.json"
+        abbr = json.loads(manual.read_text(encoding="utf-8"))["province_abbr"]
         states = []
         for f in self._load("provinces/provinces.all.min.geojson"):
             t = f["properties"].get("tags", f["properties"])
@@ -75,7 +83,7 @@ class IranBoundaries(Source):
                 continue
             states.append({
                 "fips": iso[3:], "iso": iso, "name": _en(t, (" Province",)), "name_fa": t.get("name:fa"),
-                "wikidata": t.get("wikidata"),
+                "abbr": None, "wikidata": t.get("wikidata"),
                 "rings": [_simplify(r) for r in geojson_rings(f["geometry"])],
             })
         counties = []
@@ -90,6 +98,12 @@ class IranBoundaries(Source):
                     "state_fips": c, "wikidata": t.get("wikidata"), "osm": f["properties"].get("id"),
                     "rings": [_simplify(r) for r in geojson_rings(f["geometry"])],
                 })
+        for s in states:
+            s["name"] = NAME_FIX.get(s["name"], s["name"])
+            s["abbr"] = abbr.get(s["name"]) or s["fips"]
+        missing = [s["name"] for s in states if s["name"] not in abbr]
+        if missing:
+            print(f"    no abbreviation for: {missing}")
         print(f"    {len(states)} provinces, {len(counties)} counties")
         return {
             "vintage": f"OpenStreetMap via iran-geojson @ {COMMIT[:10]}",
