@@ -116,3 +116,9 @@ body.game-on #city-panel, body.game-on .search, body.game-on #btn-res { display:
 .gm-report li[data-cell]:hover { color: var(--gold-bright); }
 .gm-report li span { flex: none; width: 20px; text-align: center; }
 @media (max-width: 700px) { .gm-report { left: 50%; width: calc(100vw - 24px); } .gm-start h2 { font-size: 26px; } }
+
+/* close-up city screen */
+.gm-open { width: 100%; justify-content: center; margin: 2px 0 8px; font-size: 14px; padding: 6px 10px; background: linear-gradient(180deg, #6b5526, #43361a); }
+.gm-head .btn { flex: none; }
+.gm-placing { border-left: 3px solid #8fd47a; background: rgba(120,220,120,.07); }
+.gm-placing h3 { color: #b9ec9f; }

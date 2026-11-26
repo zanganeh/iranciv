@@ -7,7 +7,7 @@ import {
 import {
   newGame, endTurn, save, load, cityYields, factionTotals, availableTechs, setResearch, buildOptions, setBuild,
   buildCost, hurryCost, hurry, canFound, foundCity, reachable, orderMove, improveOptions, improve, routeTargets,
-  unitsAt, cityAt, embassyTargets, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
+  unitsAt, cityAt, embassyTargets, siteOptions, siteBonus, SITE_RULES, citiesOf, unitsOf, factionOf, tileYield, progress, score, disband, VICTORY_NAME, WIN,
 } from "./game.js";
 import { aiTurn, actUnit } from "./ai.js";
 import { createView, touch, drawWorld, drawTokens } from "./render.js";
@@ -89,6 +89,8 @@ export function installGame(app) {
   }
 
   function show() {
+    view.cityView = null;
+    view.placing = null;
     view.g = g;
     view.board = board;
     view.sel = null;
@@ -122,6 +124,7 @@ export function installGame(app) {
     if (app.mode !== "game" || !g) return false;
     const cell = ev.cell;
     if (cell == null || cell < 0) return true;
+    if (view.cityView) return cityClick(cell);
     const F = g.factions[g.human];
     const u = view.sel?.unit;
     const here = unitsAt(g, cell).filter((x) => x.f === g.human);
@@ -143,9 +146,56 @@ export function installGame(app) {
       return true;
     }
     const c = cityAt(g, cell);
-    if (c && F.seen[cell]) { select({ city: c }); return true; }
+    if (c && F.seen[cell]) {
+      if (view.sel?.city === c && c.f === g.human) openCity(c); // a second click opens the close-up
+      else select({ city: c });
+      return true;
+    }
     if (F.seen[cell] && board.tiles[cell].land) { select({ cell }); return true; }
     select(null);
+    return true;
+  }
+
+  // --- close-up city screen ---------------------------------------------------------------------------------------
+  function openCity(c) {
+    view.cityView = c;
+    view.placing = null;
+    view.cityTile = null;
+    view.sel = { city: c };
+    view.reach = null;
+    reportEl?.remove();
+    const t = board.tiles[c.cell];
+    app.flyTo(t.x, t.y, 5.2, 600);
+    app.requestDraw();
+    render();
+  }
+  function closeCity() {
+    const c = view.cityView;
+    view.cityView = null;
+    view.placing = null;
+    if (c) { const t = board.tiles[c.cell]; app.flyTo(t.x, t.y, 2.4, 500); }
+    app.requestDraw();
+    render();
+  }
+  function startPlacing(id) {
+    const c = view.cityView;
+    view.placing = { bld: id, options: siteOptions(g, board, c, id) };
+    app.requestDraw();
+    render();
+  }
+  function cityClick(cell) {
+    const c = view.cityView;
+    if (view.placing) {
+      const o = view.placing.options.find((x) => x.cell === cell);
+      if (o) {
+        setBuild(g, c, "bld", view.placing.bld, cell);
+        app.ui.toast(`${BUILDINGS[view.placing.bld].name} will stand ${o.centre ? "in the city centre" : "here"}.`);
+        view.placing = null;
+        changed();
+      }
+      return true;
+    }
+    if (c.tiles.includes(cell)) { view.cityTile = cell; render(); }
     return true;
   }
 
@@ -207,6 +257,7 @@ export function installGame(app) {
 
   function render() {
     if (!dockEl || !g) return;
+    if (view.cityView) { dockEl.innerHTML = cityScreenHtml(view.cityView); return; }
     const F = g.factions[g.human];
     const tot = factionTotals(g, board, g.human);
     const era = ERAS[Math.max(0, ...Object.keys(F.techs).map((t) => TECH[t].era), 0)];
@@ -342,6 +393,59 @@ export function installGame(app) {
     return h.join("");
   }
 
+  const bonusText = (bn) => Object.entries(bn).map(([k, v]) => `+${v} ${YIELD_INFO[k].emoji}`).join(" ");
+
+  function cityScreenHtml(c) {
+    const F = g.factions[g.human];
+    const y = cityYields(g, board, c);
+    const h = [];
+    h.push(`<div class="gm-head" style="--fc:${F.color}"><div class="gm-crest">${esc(c.name[0])}</div>
+      <div class="gm-title"><b>${c.capital ? "★ " : ""}${esc(c.name)}</b><span>Population ${c.pop} · ${esc(yearLabel(g.turn))}</span></div>
+      <button class="btn" data-act="closecity">◀ Realm</button></div>`);
+    h.push(`<div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>`);
+    const turnsGrow = y.surplus > 0 ? Math.ceil((y.need - c.food) / y.surplus) : null;
+    h.push(`<section class="gm-sec"><div class="gm-row"><b>👥 Growth</b><span class="muted">${y.surplus >= 0 ? `+${y.surplus} food, next citizen in ${turnsGrow ?? "∞"} turns` : `${y.surplus} food: starving`}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}
+      <p class="muted gm-small">The dashed hexes are the ${y.worked.length} your citizens farm and work.</p>`);
+    if (c.build) {
+      const cost = buildCost(c.build);
+      const name = c.build.kind === "unit" ? UNITS[c.build.id].name : BUILDINGS[c.build.id].name;
+      const turns = y.prod > 0 ? Math.max(1, Math.ceil((cost - c.prod) / y.prod)) : "∞";
+      const where = c.build.kind === "bld" ? (c.build.site != null && c.build.site !== c.cell ? " · on its own hex" : " · site chosen when done") : "";
+      const hc = hurryCost(c);
+      h.push(`<div class="gm-row"><b>⚒️ ${esc(name)}</b><span class="muted">${turns} turns${where}</span></div>${bar(c.prod / cost, YIELD_INFO.prod.color)}`);
+      if (hc > 0) h.push(`<button class="gm-link" data-act="hurry" ${F.gold >= hc ? "" : "disabled"}>Finish now for ${hc} 🪙</button>`);
+    } else h.push(`<div class="gm-warn">Choose what ${esc(c.name)} builds next.</div>`);
+    h.push(`</section>`);
+    if (view.placing) {
+      const B = BUILDINGS[view.placing.bld];
+      const best = view.placing.options.filter((o) => !o.centre).sort((a, b) => Object.values(b.bonus).reduce((p, q) => p + q, 0) - Object.values(a.bonus).reduce((p, q) => p + q, 0))[0];
+      h.push(`<section class="gm-sec gm-sel gm-placing"><h3>Place the ${esc(B.name)}</h3>
+        <p class="gm-small">Click a highlighted hex on the map. ${esc(SITE_RULES[view.placing.bld]?.text || "")}. A building on its own hex takes that land out of farming; in the city centre it costs no land but earns no bonus.</p>
+        ${best && Object.keys(best.bonus).length ? `<p class="gm-small">Best spot: <b>${esc(board.tiles[best.cell].name)}</b> ${bonusText(best.bonus)}</p>` : ""}
+        <div class="gm-acts"><button class="btn" data-act="placecentre">Build in the city centre</button><button class="btn" data-act="cancelplace">Cancel</button></div></section>`);
+    }
+    const opts = buildOptions(g, c);
+    h.push(`<section class="gm-sec"><h3>Raise a building</h3><div class="gm-builds">${opts.filter((o) => o.kind === "bld").map((o) => {
+      const B = BUILDINGS[o.id];
+      const on = c.build && c.build.kind === "bld" && c.build.id === o.id;
+      return `<button class="gm-opt ${on ? "on" : ""} ${o.wonder ? "wonder" : ""}" data-place="${o.id}" title="${esc(B.desc)}">
+        <b>${o.wonder ? "✦ " : ""}${esc(B.name)}</b><span>${o.cost} ⚒️ · ${esc(B.desc)}</span><small>${esc(SITE_RULES[o.id]?.text || "")}</small></button>`;
+    }).join("") || '<p class="muted gm-small">Learn new ideas to unlock buildings.</p>'}</div></section>`);
+    h.push(`<section class="gm-sec"><h3>Train</h3><div class="gm-builds">${opts.filter((o) => o.kind === "unit").map((o) => {
+      const on = c.build && c.build.kind === "unit" && c.build.id === o.id;
+      return `<button class="gm-opt ${on ? "on" : ""}" data-build="unit:${o.id}" ${o.ok ? "" : "disabled"} title="${esc(UNITS[o.id].desc)}">
+        <b>${UNITS[o.id].emoji} ${esc(o.name)}</b><span>${o.cost} ⚒️</span><small>${esc(o.ok ? UNITS[o.id].desc : o.why)}</small></button>`;
+    }).join("")}</div></section>`);
+    const blds = Object.keys(c.blds);
+    h.push(`<section class="gm-sec"><h3>Buildings</h3>${blds.length ? `<ul class="gm-log">${blds.map((b) => {
+      const site = c.sites?.[b];
+      const own = site != null && site !== c.cell;
+      return `<li${own ? ` data-cell="${site}"` : ""}><b>${esc(BUILDINGS[b].name)}</b> ${own ? `on ${esc(board.tiles[site].name)} ${bonusText(siteBonus(g, board, c, b, site))}` : '<span class="muted">in the city centre</span>'}</li>`;
+    }).join("")}</ul>` : '<p class="muted gm-small">None yet.</p>'}</section>`);
+    if (view.cityTile != null) h.push(`<section class="gm-sec"><h3>This hex</h3>${tileLine(view.cityTile)}</section>`);
+    return h.join("");
+  }
+
   function cityHtml(c) {
     const mine = c.f === g.human;
     const F = g.factions[c.f];
@@ -351,6 +455,7 @@ export function installGame(app) {
       return h.join("");
     }
     const y = cityYields(g, board, c);
+    h.push(`<button class="btn gm-open" data-act="opencity">🏛️ Open the city: place buildings</button>`);
     h.push(`<div class="gm-stores">${["food", "prod", "gold", "sci", "cult"].map((k) => yieldChip(k, y[k])).join("")}</div>`);
     const turnsGrow = y.surplus > 0 ? Math.ceil((y.need - c.food) / y.surplus) : null;
     h.push(`<div class="gm-row"><b>👥 Population ${c.pop}</b><span class="muted">${y.surplus >= 0 ? `+${y.surplus} food, grows in ${turnsGrow ?? "∞"} turns` : `${y.surplus} food: starving`}</span></div>${bar(c.food / y.need, YIELD_INFO.food.color)}`);
@@ -391,12 +496,17 @@ export function installGame(app) {
       if (t && g.factions[g.human].seen[t.i]) app.flyTo(t.x, t.y, Math.max(app.cam.scale, 1.4), 500);
       return;
     }
-    const u = view.sel?.unit, c = view.sel?.city;
+    const u = view.sel?.unit, c = view.cityView || view.sel?.city;
+    if (b.dataset.place) { startPlacing(b.dataset.place); return; }
     if (b.dataset.tech) { setResearch(g, g.human, b.dataset.tech); showTechs = false; changed(); return; }
     if (b.dataset.build) { const [k, id] = b.dataset.build.split(":"); setBuild(g, c, k, id); changed(); return; }
     if (b.dataset.imp && u) { if (improve(g, board, u, b.dataset.imp)) app.ui.toast(`${IMPROVEMENTS[b.dataset.imp].name} built.`); changed(); return; }
     switch (b.dataset.act) {
       case "end": doEndTurn(); break;
+      case "opencity": openCity(c); break;
+      case "closecity": closeCity(); break;
+      case "placecentre": setBuild(g, c, "bld", view.placing.bld, c.cell); view.placing = null; changed(); break;
+      case "cancelplace": view.placing = null; app.requestDraw(); render(); break;
       case "next": nextUnit(); break;
       case "techs": showTechs = !showTechs; render(); break;
       case "found": {
@@ -467,11 +577,15 @@ export function installGame(app) {
       offs = [];
       playBtn?.classList.remove("active");
       closeStart();
+      view.cityView = null;
+      view.placing = null;
       reportEl?.remove();
       reportEl = null;
       view.g = null;
     },
     onEscape() {
+      if (view.placing) { view.placing = null; app.requestDraw(); render(); return true; }
+      if (view.cityView) { closeCity(); return true; }
       if (view.sel) { select(null); return true; }
       return true; // stay in the game; leave with the button
     },

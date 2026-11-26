@@ -66,7 +66,8 @@ const WARM = [255, 241, 196], COOL = [38, 52, 86];
 
 // --- entry point -------------------------------------------------------------------------------------------------
 
-export function drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod, bridges } = {}) {
+// ancient: leave out modern farm features (centre pivots, barns and silos), for the game view.
+export function drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod, bridges, ancient = false } = {}) {
   const R = w.grid.R;
   s = s ?? Rpx / R;
   Rpx = Rpx ?? R * s;
@@ -80,8 +81,8 @@ export function drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod, bridges } = {}) 
   const ground = [], upright = [];
   // Bridges join relief across neighbouring hexes; a lone specimen hex (the dev gallery) is drawn without them.
   bridges = bridges ?? !(Array.isArray(cells) && cells.length === 1);
-  const env = { w, R, Rpx, lod, upx, bridges, ground: null, upright: null, memo: new Map() };
-  const plans = planCache(w, `${lod}|${upx}|${Rpx}|${bridges}`);
+  const env = { w, R, Rpx, lod, upx, bridges, ancient, ground: null, upright: null, memo: new Map() };
+  const plans = planCache(w, `${lod}|${upx}|${Rpx}|${bridges}|${ancient}`);
   for (const i of cells) {
     let pl = plans.get(i);
     if (!pl) {
@@ -652,7 +653,7 @@ function planCell(env, i) {
   if (w.water[i]) return;
   const city = w.cityByCell.get(i);
   const spill = metroSpill(w).get(i);
-  const tiled = (city && !cityIsDot(city, env.Rpx)) || (spill && !cityIsDot(spill, env.Rpx) && !cityIsDot(spill.of, env.Rpx));
+  const tiled = !env.ancient && ((city && !cityIsDot(city, env.Rpx)) || (spill && !cityIsDot(spill, env.Rpx) && !cityIsDot(spill.of, env.Rpx)));
   const x = w.grid.cx(i), y = w.grid.cy(i);
   const a = w.raw.owner[i] === FOREIGN ? FOREIGN_ALPHA : 1;
   const rel = w.relief[i], cv = w.cover[i];
@@ -730,12 +731,12 @@ function planCell(env, i) {
   switch (cv) {
     case COVER.CROP: {
       // The fields themselves are the world-anchored patchwork (drawFields); here: pivots and farmsteads.
-      if (!onHill && pivotCountry(w, i) && h(105) < (elev > 700 ? 0.5 : 0.3)) {
+      if (!env.ancient && !onHill && pivotCountry(w, i) && h(105) < (elev > 700 ? 0.5 : 0.3)) {
         const two = h(106) < 0.35;
         const P = two ? [[-0.3, -0.16], [0.3, 0.24]] : [[0, 0.04]];
         P.forEach(([px, py], k) => flat("pivot", "", vary(107 + k, 6), px + (h(109 + k) - 0.5) * 0.3, py + (h(111 + k) - 0.5) * 0.24, 0.85 + h(113 + k) * 0.3));
       }
-      if (near && h(101) < 0.3) {
+      if (near && !env.ancient && h(101) < 0.3) {
         if (onHill) onTops(1, 115, (px, py, z) => up("barn", "", vary(102, 4), px, py, 0.8, z));
         else up("barn", "", vary(102, 4), (h(103) - 0.5) * 0.7, 0.1 + (h(104) - 0.5) * 0.5, 1);
       }
@@ -744,14 +745,17 @@ function planCell(env, i) {
     case COVER.PASTURE:
       if (onHill) break;
       flat("pasture", "", vary(110, 8));
-      if (near && h(111) < 0.22) up("barn", "", vary(112, 4), (h(113) - 0.5) * 0.7, 0.1 + (h(114) - 0.5) * 0.5, 0.9);
+      if (near && !env.ancient && h(111) < 0.22) up("barn", "", vary(112, 4), (h(113) - 0.5) * 0.7, 0.1 + (h(114) - 0.5) * 0.5, 0.9);
       break;
     case COVER.WETLAND:
       if (!onHill) flat("marsh", "", vary(120, 8));
       break;
     case COVER.URBAN:
       // Suburbs (render/art/city.js SUBURB_ART): lawn, winding roads and cul-de-sacs, houses and tree clumps.
-      if (!onHill) {
+      // The ancient game view shows today's built-up land as open farmland instead.
+      if (env.ancient) {
+        if (!onHill) flat("pasture", "", vary(110, 8));
+      } else if (!onHill) {
         flat("suburbGround", "", vary(130, 8));
         up("suburbBuild", "", vary(130, 8), 0, 0, 1, 0);
       } else if (near) onTops(1, 132, (px, py, z) => up("suburbBuild", "small", vary(130, 8), px, py + 0.1, 0.7, z));

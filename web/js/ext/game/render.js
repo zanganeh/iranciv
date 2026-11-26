@@ -2,8 +2,10 @@
 // cities, units, selection and move range (screen space, on top). They read `view` (set by ui.js).
 
 import { SQRT3, UNITS } from "./rules.js";
-import { visibleSet, has } from "./game.js";
-import { drawAncientCity, drawUnitToken, cityRadius, cityDrawR } from "./art.js";
+import { visibleSet, has, cityYields } from "./game.js";
+import { drawAncientCity, drawUnitToken, drawBuilding, cityRadius, cityDrawR } from "./art.js";
+
+const YIELD_EMOJI = { food: "🌾", prod: "⚒️", gold: "🪙", sci: "📜", cult: "🏺" };
 
 export function createView() {
   return { g: null, board: null, sel: null, reach: null, vis: null, version: 0, cache: null, hover: -1 };
@@ -131,9 +133,16 @@ export function drawWorld(ctx, cam, view) {
     for (const city of g.cities) {
       if (me && !me.seen[city.cell]) continue;
       const t = view.board.tiles[city.cell];
+      const outside = new Set();
+      for (const [b, cell] of Object.entries(city.sites || {})) {
+        if (cell === city.cell) continue;
+        outside.add(b);
+        const u = view.board.tiles[cell];
+        drawBuilding(ctx, b, u.x, u.y, R * 0.5, px);
+      }
       drawAncientCity(ctx, t.x, t.y, cityDrawR(R, city.pop, cam.scale), {
         pop: city.pop, color: g.factions[city.f].color, capital: city.capital, walls: has(g, city.f, "masonry"),
-        blds: city.blds, seed: city.id * 7919 + city.cell, px,
+        blds: city.blds, seed: city.id * 7919 + city.cell, px, outside,
       });
     }
   }
@@ -154,10 +163,60 @@ export function drawWorld(ctx, cam, view) {
     ctx.lineWidth = Math.max(1, 2 * px);
     ctx.stroke(p);
   }
+  if (view.cityView) drawCityFocus(ctx, cam, view, px);
   ctx.fillStyle = "rgba(14,16,22,0.97)";
   ctx.fill(c.fogDark);
   ctx.fillStyle = "rgba(14,16,22,0.42)";
   ctx.fill(c.fogDim);
+}
+
+// The close-up city screen: dim the land outside the city, mark the worked hexes and the building sites on offer.
+function drawCityFocus(ctx, cam, view, px) {
+  const { g, board } = view;
+  const c = view.cityView;
+  const { grid } = board;
+  const R = grid.R;
+  const inCity = new Set(c.tiles);
+  const dim = new Path2D();
+  const half = 3000;
+  dim.rect(cam.x - half, cam.y - half, half * 2, half * 2);
+  for (const i of c.tiles) hexPath(dim, grid.cx(i), grid.cy(i), R + 0.2);
+  ctx.fillStyle = "rgba(10,10,14,0.62)";
+  ctx.fill(dim, "evenodd");
+  const edge = new Path2D();
+  for (const i of c.tiles) for (let d = 0; d < 6; d++) {
+    const j = grid.neighbour(i, d);
+    if (j >= 0 && inCity.has(j)) continue;
+    const [a, b] = EDGE[d];
+    const [x0, y0] = corner(grid.cx(i), grid.cy(i), R, a), [x1, y1] = corner(grid.cx(i), grid.cy(i), R, b);
+    edge.moveTo(x0, y0);
+    edge.lineTo(x1, y1);
+  }
+  ctx.strokeStyle = "#f2dfa8";
+  ctx.lineWidth = Math.max(2, 3.5 * px);
+  ctx.stroke(edge);
+  // worked hexes: a ring of light
+  const worked = cityYields(g, board, c).worked;
+  for (const i of worked) {
+    const p = new Path2D();
+    hexPath(p, grid.cx(i), grid.cy(i), R - 2.2);
+    ctx.strokeStyle = "rgba(255,246,210,0.75)";
+    ctx.lineWidth = Math.max(1.5, 2.5 * px);
+    ctx.setLineDash([6 * px, 4 * px]);
+    ctx.stroke(p);
+    ctx.setLineDash([]);
+  }
+  // building sites on offer while placing
+  for (const o of view.placing?.options || []) {
+    const p = new Path2D();
+    hexPath(p, grid.cx(o.cell), grid.cy(o.cell), R - 1.2);
+    const v = Object.values(o.bonus).reduce((a, b) => a + b, 0);
+    ctx.fillStyle = o.centre ? "rgba(236,208,142,0.28)" : v > 0 ? "rgba(120,220,120,0.30)" : "rgba(236,208,142,0.16)";
+    ctx.fill(p);
+    ctx.strokeStyle = view.hover === o.cell ? "#fff" : "#ecd08e";
+    ctx.lineWidth = Math.max(2, 3 * px);
+    ctx.stroke(p);
+  }
 }
 
 /** Screen-space layer: cities, units, selection. */
@@ -233,6 +292,23 @@ export function drawTokens(ctx, cam, view) {
       ctx.textAlign = "center";
       ctx.fillText("★", bx + tw + pw + 13, by + h / 2 + 0.5);
       ctx.textAlign = "left";
+    }
+  }
+  // placement labels (close-up city screen)
+  if (view.placing?.options) {
+    ctx.textAlign = "center";
+    for (const o of view.placing.options) {
+      const t = board.tiles[o.cell];
+      const x = sx(t.x), y = sy(t.y) - (o.centre ? board.grid.R * s * 0.62 : 0);
+      const parts = Object.entries(o.bonus).map(([k, v]) => `+${v} ${YIELD_EMOJI[k]}`);
+      const label = o.centre ? "City centre" : parts.length ? parts.join(" ") : "no bonus";
+      ctx.font = "700 13px system-ui, sans-serif";
+      const w = ctx.measureText(label).width + 14;
+      ctx.fillStyle = parts.length ? "rgba(24,60,24,0.9)" : "rgba(20,22,28,0.85)";
+      roundRect(ctx, x - w / 2, y - 11, w, 22, 11);
+      ctx.fill();
+      ctx.fillStyle = parts.length ? "#c8f5b4" : "#e8dcc0";
+      ctx.fillText(label, x, y + 0.5);
     }
   }
   // units, grouped by cell

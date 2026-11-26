@@ -39,12 +39,12 @@ export const PEOPLES = [
 ];
 
 // --- techs -------------------------------------------------------------------------------------------------------
-// Each people's gift: +1 of one yield in every city they found (rivals have theirs too).
+// Each people's gift: +n (default 1) of one yield in every city they found (rivals have theirs too).
 export const LEANINGS = {
   builder: { yield: "prod", title: "Builders", text: "Patient masons and smiths. +1 Production in every city." },
-  trader: { yield: "gold", title: "Traders", text: "Caravan people of the salt roads. +1 Gold in every city." },
-  expander: { yield: "food", title: "Settlers", text: "Herders and farmers always moving on. +1 Food in every city." },
-  scholar: { yield: "sci", title: "Scholars", text: "Star-watchers and scribes. +1 Science in every city." },
+  trader: { yield: "gold", n: 2, title: "Traders", text: "Caravan people of the salt roads. +2 Gold in every city." },
+  expander: { yield: "food", n: 2, title: "Settlers", text: "Herders and farmers always moving on. +2 Food in every city." },
+  scholar: { yield: "sci", n: 2, title: "Scholars", text: "Star-watchers and scribes. +2 Science in every city." },
 };
 
 export const ERAS = ["Ancient", "Classical", "Medieval"];

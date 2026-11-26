@@ -186,7 +186,7 @@ export function drawStatic(ctx, vp, w, opts) {
   // 4. Biome + relief glyphs (terrain view only, readable sizes only).
   lap("grid");
   upTo(Z.GLYPHS);
-  if (!opts.lens && Rpx > GLYPHS_MIN_RPX) drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod });
+  if (!opts.lens && Rpx > GLYPHS_MIN_RPX) drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod, ancient: !!opts.bare });
   lap("glyphs");
 
   // 5. Rivers and borders, clipped to the world rectangle.
@@ -270,7 +270,7 @@ export function warmSprites(ctx, vp, w, opts = {}) {
     const { r0, r1, c0, c1 } = grid.range(vp.x0, vp.y0, vp.x1, vp.y1);
     const cells = [];
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) cells.push(r * grid.cols + c);
-    drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod });
+    drawTerrainGlyphs(ctx, cells, w, { Rpx, s, lod, ancient: !!opts.bare });
   }
   if (!opts.bare) drawCityTiles(ctx, w, Rpx, s, lod, opts.selectedCity || null, vp);
   const layers = (opts.bare ? [] : opts.layers || []).filter((l) => typeof l.warm === "function" && layerActive(l, Rpx));

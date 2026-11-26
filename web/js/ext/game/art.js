@@ -39,7 +39,7 @@ export function cityDrawR(R, pop, s) {
 /**
  * Draw an ancient city at (x, y). opts: {pop, color, capital, walls, blds, seed, px (km per screen px), name}.
  */
-export function drawAncientCity(ctx, x, y, R, { pop = 1, color = "#c33", capital = false, walls = false, blds = {}, seed = 1, px = 0.1 } = {}) {
+export function drawAncientCity(ctx, x, y, R, { pop = 1, color = "#c33", capital = false, walls = false, blds = {}, seed = 1, px = 0.1, outside = null } = {}) {
   const rand = rng(seed * 2654435761);
   const rad = cityRadius(R, pop);
   // trodden ground
@@ -78,11 +78,13 @@ export function drawAncientCity(ctx, x, y, R, { pop = 1, color = "#c33", capital
   const spots = [[-0.42, -0.25], [0.42, -0.2], [-0.3, 0.38], [0.36, 0.34], [0, -0.5], [0, 0.5]];
   let si = 0;
   const spot = () => { const [a, b] = spots[si++ % spots.length]; return [x + a * rad, y + b * rad]; };
-  if (blds.temple) fireTemple(ctx, ...spot(), R * 0.13, px);
-  if (blds.garden) garden(ctx, ...spot(), R * 0.17, px);
-  if (blds.market || blds.bazaar) awnings(ctx, ...spot(), R * 0.14, px);
-  if (blds.observatory) tower(ctx, ...spot(), R * 0.12, px);
-  if (blds.library || blds.wisdom || blds.academy) hall(ctx, ...spot(), R * 0.13, px);
+  // (buildings that stand on their own hex, listed in `outside`, are drawn there by drawBuilding instead)
+  const inside = (b) => blds[b] && !outside?.has(b);
+  if (inside("temple")) fireTemple(ctx, ...spot(), R * 0.13, px);
+  if (inside("garden")) garden(ctx, ...spot(), R * 0.17, px);
+  if (inside("market") || inside("bazaar")) awnings(ctx, ...spot(), R * 0.14, px);
+  if (inside("observatory")) tower(ctx, ...spot(), R * 0.12, px);
+  if (inside("library") || inside("wisdom") || inside("academy")) hall(ctx, ...spot(), R * 0.13, px);
   // walls
   if (walls) {
     ctx.beginPath();
@@ -215,6 +217,75 @@ function hall(ctx, x, y, s, px) {
   ctx.strokeRect(x - s, y - s * 0.5, s * 2, s);
   ctx.fillStyle = "rgba(90,62,34,0.7)";
   for (let k = -2; k <= 2; k++) ctx.fillRect(x + k * s * 0.38 - px * 0.6, y - s * 0.5, px * 1.2, s);
+}
+
+/** A building on its own hex at (x, y), about `s` km across. */
+export function drawBuilding(ctx, id, x, y, s, px) {
+  // a paved plot under every building
+  ctx.beginPath();
+  ctx.arc(x, y, s * 1.15, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(214,192,150,0.85)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(110,80,44,0.8)";
+  ctx.lineWidth = Math.max(px, s * 0.04);
+  ctx.stroke();
+  const k = s * 0.55;
+  switch (id) {
+    case "temple": fireTemple(ctx, x, y + k * 0.5, k, px); break;
+    case "garden": garden(ctx, x, y, k * 1.3, px); break;
+    case "market": awnings(ctx, x - k * 0.05, y, k, px); break;
+    case "bazaar": awnings(ctx, x, y - k * 0.5, k, px); awnings(ctx, x, y + k * 0.5, k, px); break;
+    case "observatory": tower(ctx, x, y + k * 0.3, k * 0.9, px); break;
+    case "library": case "academy": case "wisdom": hall(ctx, x, y, k, px); if (id !== "library") dome(ctx, x, y - k * 0.5, k * 0.45, id === "wisdom" ? "#3c8fd8" : "#c9a45c", px); break;
+    case "granary": for (const dx of [-0.6, 0, 0.6]) silo(ctx, x + dx * k, y, k * 0.32, px); break;
+    case "workshop": house(ctx, x, y, k * 1.6, k * 1.1, "#c8a370", px); smoke(ctx, x + k * 0.4, y - k * 0.6, k, px); break;
+    case "aqueduct": arches(ctx, x, y, k, px); break;
+    case "caravanserai": courtyard(ctx, x, y, k, px); break;
+    case "bimaristan": hall(ctx, x, y, k, px); dome(ctx, x, y - k * 0.5, k * 0.45, "#4fa36a", px); break;
+    default: house(ctx, x, y, k, k, "#d6b07a", px);
+  }
+}
+
+function dome(ctx, x, y, r, color, px) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, Math.PI, 0);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(60,40,20,0.85)";
+  ctx.lineWidth = px;
+  ctx.stroke();
+}
+function silo(ctx, x, y, r, px) {
+  ctx.fillStyle = "#d9bd8a";
+  ctx.fillRect(x - r, y - r * 0.4, r * 2, r * 1.6);
+  ctx.strokeStyle = "rgba(90,62,34,0.9)";
+  ctx.lineWidth = px;
+  ctx.strokeRect(x - r, y - r * 0.4, r * 2, r * 1.6);
+  dome(ctx, x, y - r * 0.4, r, "#e6cc98", px);
+}
+function smoke(ctx, x, y, k, px) {
+  ctx.fillStyle = "rgba(230,230,230,0.7)";
+  for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(x + i * k * 0.15, y - i * k * 0.3, k * (0.15 + i * 0.05), 0, Math.PI * 2); ctx.fill(); }
+}
+function arches(ctx, x, y, k, px) {
+  ctx.fillStyle = "#cfae7c";
+  ctx.fillRect(x - k * 1.3, y - k * 0.5, k * 2.6, k);
+  ctx.fillStyle = "rgba(60,40,20,0.75)";
+  for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(x - k * 0.975 + i * k * 0.65, y + k * 0.5, k * 0.22, Math.PI, 0); ctx.fill(); }
+  ctx.fillStyle = "#6fb6e0";
+  ctx.fillRect(x - k * 1.3, y - k * 0.6, k * 2.6, k * 0.14);
+}
+function courtyard(ctx, x, y, k, px) {
+  ctx.fillStyle = "#cfae7c";
+  ctx.fillRect(x - k, y - k, k * 2, k * 2);
+  ctx.fillStyle = "#e9d6ae";
+  ctx.fillRect(x - k * 0.55, y - k * 0.55, k * 1.1, k * 1.1);
+  ctx.strokeStyle = "rgba(90,62,34,0.9)";
+  ctx.lineWidth = px;
+  ctx.strokeRect(x - k, y - k, k * 2, k * 2);
+  ctx.fillStyle = "#6fb6e0";
+  ctx.beginPath(); ctx.arc(x, y, k * 0.18, 0, Math.PI * 2); ctx.fill();
 }
 
 // --- units -------------------------------------------------------------------------------------------------------

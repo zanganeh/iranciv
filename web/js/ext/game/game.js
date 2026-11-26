@@ -9,7 +9,7 @@ import {
   LEANINGS, canImprove, hexDist, ring, moveCost, siteScore, yearLabel,
 } from "./rules.js";
 
-export const WIN = { heritage: 4, culture: 2000, gold: 11000, pop: 100 };
+export const WIN = { heritage: 4, culture: 2600, gold: 9500, pop: 95 };
 const CITY_MIN_DIST = 4; // hexes between city centres
 const CLAIM_RADIUS = 3; // how far a city's borders can grow
 
@@ -79,12 +79,15 @@ function pickStarts(g, board, count) {
 }
 
 export function syncBoard(g, board) {
+  Object.defineProperty(g, "_board", { value: board, writable: true, enumerable: false, configurable: true });
+  const built = new Set();
+  for (const c of g.cities) for (const v of Object.values(c.sites || {})) built.add(v);
   for (let i = 0; i < board.n; i++) {
     const t = board.tiles[i];
     if (!t.land) continue;
     t.improvement = g.imp[i];
     t.road = !!g.road[i];
-    t.city = g.cityAt[i] >= 0;
+    t.city = g.cityAt[i] >= 0 || built.has(i); // no farm or mine under a city or a building
   }
 }
 
@@ -135,7 +138,8 @@ export function cityYields(g, board, c) {
     sci: centre.sci + 1, cult: centre.cult + 1,
   };
   const pool = [];
-  for (const i of c.tiles) if (i !== c.cell) pool.push([i, tileYield(g, board, i)]);
+  const built = builtCells(c);
+  for (const i of c.tiles) if (i !== c.cell && !built.has(i)) pool.push([i, tileYield(g, board, i)]);
   const worked = [];
   let food = y.food;
   for (let k = 0; k < c.pop && pool.length; k++) {
@@ -148,8 +152,8 @@ export function cityYields(g, board, c) {
     food += ty.food;
   }
   y.sci += Math.floor(c.pop / 2); // every two citizens keep one scholar
-  const gift = LEANINGS[g.factions[c.f].leaning]?.yield;
-  if (gift) y[gift] += 1;
+  const gift = LEANINGS[g.factions[c.f].leaning];
+  if (gift) y[gift.yield] += gift.n || 1;
   const pct = { food: 0, prod: 0, gold: 0, sci: 0, cult: 0 };
   let growth = 0, routeBonus = 0;
   for (const b of Object.keys(c.blds)) {
@@ -158,12 +162,93 @@ export function cityYields(g, board, c) {
     for (const [k, v] of Object.entries(B.pct || {})) pct[k] += v;
     growth += B.growth || 0;
     routeBonus += B.routes || 0;
+    const site = c.sites?.[b];
+    if (site != null && site !== c.cell) for (const [k, v] of Object.entries(siteBonus(g, board, c, b, site))) y[k] += v;
   }
   for (const r of c.routes) y.gold += r.gold + routeBonus;
   for (const r of c.routes) if (r.foreign) y.sci += 1;
   for (const k of YIELD_KEYS) y[k] = Math.round(y[k] * (1 + pct[k]));
   const eat = 2 * c.pop;
   return { ...y, eat, surplus: y.food - eat, worked, growth, need: growNeed(c.pop, growth) };
+}
+
+// --- building sites -------------------------------------------------------------------------------------------------
+// A building stands in the city centre (no bonus, no land lost) or on one of the city's own hexes within 2 steps.
+// On a hex it takes that land out of farming but earns a bonus from what is around it, so where you build matters.
+
+export const SITE_RULES = {
+  granary: { yield: "food", text: "+1 Food per farm or fertile plain next to it (up to 3)" },
+  library: { yield: "sci", text: "+1 Science per building next to it (up to 2), +1 by a river" },
+  market: { yield: "gold", text: "+1 Gold on a river or road, +1 next to the city centre" },
+  workshop: { yield: "prod", text: "+1 Production per hill, mountain or mine next to it (up to 3)" },
+  temple: { yield: "cult", text: "+2 Culture on hills, +2 next to heritage ground" },
+  aqueduct: { yield: "food", text: "+2 Food on a river or next to hills" },
+  caravanserai: { yield: "gold", text: "+1 Gold per road next to it, +2 at the desert's edge" },
+  academy: { yield: "sci", text: "+1 Science per building next to it (up to 3)" },
+  wisdom: { yield: "sci", text: "+1 Science per building next to it (up to 3)" },
+  bazaar: { yield: "gold", text: "+1 Gold per building next to it (up to 3), +1 on a road" },
+  bimaristan: { yield: "food", text: "+2 Food by fresh water" },
+  garden: { yield: "cult", text: "+3 Culture by a river or lake" },
+  observatory: { yield: "sci", text: "+3 Science on hills" },
+};
+
+function builtCells(c) {
+  const out = new Set();
+  for (const v of Object.values(c.sites || {})) if (v !== c.cell) out.add(v);
+  if (c.build?.site != null && c.build.site !== c.cell) out.add(c.build.site);
+  return out;
+}
+
+/** The bonus building `b` earns standing on `cell` of city c (not the centre). */
+export function siteBonus(g, board, c, b, cell) {
+  const t = board.tiles[cell];
+  const rule = SITE_RULES[b];
+  if (!rule) return {};
+  const nb = [];
+  for (let d = 0; d < 6; d++) { const j = board.grid.neighbour(cell, d); if (j >= 0) nb.push(j); }
+  const bldNext = nb.filter((j) => j === c.cell || Object.entries(c.sites || {}).some(([k, v]) => v === j && k !== b)).length;
+  let n = 0;
+  switch (b) {
+    case "granary": n = Math.min(3, nb.filter((j) => g.imp[j] === "farm" || board.tiles[j].cover === "cropland").length); break;
+    case "library": n = Math.min(2, bldNext) + (t.river ? 1 : 0); break;
+    case "market": n = (t.river || g.road[cell] ? 1 : 0) + (nb.includes(c.cell) ? 1 : 0); break;
+    case "workshop": n = Math.min(3, nb.filter((j) => board.tiles[j].land && (board.tiles[j].relief >= 1 || g.imp[j] === "mine")).length); break;
+    case "temple": n = (t.relief >= 1 ? 2 : 0) + (nb.some((j) => board.tiles[j].heritage) || t.heritage ? 2 : 0); break;
+    case "aqueduct": n = t.river || t.nearHills ? 2 : 0; break;
+    case "caravanserai": n = nb.filter((j) => g.road[j]).length + (nb.some((j) => board.tiles[j].cover === "barren") ? 2 : 0); break;
+    case "academy": case "wisdom": n = Math.min(3, bldNext); break;
+    case "bazaar": n = Math.min(3, bldNext) + (g.road[cell] ? 1 : 0); break;
+    case "bimaristan": n = t.fresh ? 2 : 0; break;
+    case "garden": n = t.fresh ? 3 : 0; break;
+    case "observatory": n = t.relief >= 1 ? 3 : 0; break;
+  }
+  return n ? { [rule.yield]: n } : {};
+}
+
+/** Where building `b` can stand in city c: [{cell, centre, bonus}] (the centre first). */
+export function siteOptions(g, board, c, b) {
+  const out = [{ cell: c.cell, centre: true, bonus: {} }];
+  const taken = builtCells(c);
+  for (const i of c.tiles) {
+    if (i === c.cell || taken.has(i) || hexDist(board.grid, c.cell, i) > 2) continue;
+    const t = board.tiles[i];
+    if (!t.land || !t.passable) continue;
+    out.push({ cell: i, centre: false, bonus: siteBonus(g, board, c, b, i) });
+  }
+  return out;
+}
+
+const bonusSum = (bn) => Object.values(bn).reduce((a, v) => a + v, 0);
+
+/** The site the AI (or "place for me") picks: the biggest bonus worth more than the land it covers. */
+export function bestSite(g, board, c, b) {
+  let best = c.cell, bestV = 0.5;
+  for (const o of siteOptions(g, board, c, b)) {
+    if (o.centre) continue;
+    const v = bonusSum(o.bonus) * 2.5 - tileValue(tileYield(g, board, o.cell), false) * 0.25;
+    if (v > bestV) { bestV = v; best = o.cell; }
+  }
+  return best;
 }
 
 export const growNeed = (pop, growth = 0) => Math.round((15 + 8 * pop + pop * pop) * Math.max(0.4, 1 - growth));
@@ -223,7 +308,7 @@ export function foundCity(g, board, u) {
   F.nameIdx++;
   const c = {
     id: g.cities.length, f: u.f, name, cell: u.cell, pop: 1, food: 0, prod: 0, build: null, blds: {}, routes: [],
-    cult: 0, claims: 0, nextClaim: 8, tiles: [], founded: g.turn, capital: citiesOf(g, u.f).length === 0,
+    cult: 0, claims: 0, nextClaim: 8, tiles: [], founded: g.turn, capital: citiesOf(g, u.f).length === 0, sites: {},
   };
   g.cities.push(c);
   g.cityAt[c.cell] = c.id;
@@ -275,12 +360,15 @@ export function buildOptions(g, c) {
   return out;
 }
 
-export function setBuild(g, c, kind, id) {
+export function setBuild(g, c, kind, id, site = null) {
   const o = buildOptions(g, c).find((x) => x.kind === kind && x.id === id);
   if (!o || !o.ok) return false;
   c.build = { kind, id };
+  if (kind === "bld" && site != null && siteOptions(g, board_(g), c, id).some((x) => x.cell === site)) c.build.site = site;
   return true;
 }
+// setBuild is called without the board; the board is attached to g at runtime (not saved).
+const board_ = (g) => g._board;
 
 export const buildCost = (b) => (b.kind === "unit" ? UNITS[b.id].cost : BUILDINGS[b.id].cost);
 export const hurryCost = (c) => (c.build ? Math.max(0, Math.ceil((buildCost(c.build) - c.prod) * 2.5)) : 0);
@@ -312,6 +400,10 @@ function finishBuild(g, board, c) {
       return true;
     }
     c.blds[b.id] = g.turn;
+    c.sites = c.sites || {};
+    const valid = b.site != null && siteOptions(g, board, c, b.id).some((x) => x.cell === b.site);
+    c.sites[b.id] = valid ? b.site : bestSite(g, board, c, b.id);
+    if (c.sites[b.id] !== c.cell) { g.imp[c.sites[b.id]] = null; syncBoard(g, board); }
     if (B.wonder) {
       F.wonders.push(b.id);
       logMsg(g, -1, `The ${F.name} completed the ${B.name} in ${c.name}.`, c.cell);
@@ -674,7 +766,7 @@ export function autoBuild(g, c) {
   const pick = (kind, id) => opts.find((o) => o.kind === kind && o.id === id);
   let choice = null;
   if (mine.length + count("pioneer") < wantCities && count("pioneer") < 1 + (mine.length >= 3 ? 1 : 0) && c.pop >= 3) choice = pick("unit", "pioneer");
-  if (!choice && count("builder") < Math.ceil(mine.length / 2) + (F.leaning === "builder" ? 1 : 0)) choice = pick("unit", "builder");
+  if (!choice && count("builder") < Math.ceil(mine.length / 2) + 1) choice = pick("unit", "builder");
   if (!choice && has(g, c.f, "writing") && count("envoy") < 1 && new Set(embassyTargets(g, c.f).map((x) => x.f)).size > 0) choice = pick("unit", "envoy");
   if (!choice && has(g, c.f, "trade") && c.routes.length < maxRoutes(c) && count("caravan") < 1 + (F.leaning === "trader" ? 1 : 0) && (g.turn + c.id) % 3 === 0) choice = pick("unit", "caravan");
   if (!choice) for (const b of LEAN_BLD[F.leaning] || []) if ((choice = pick("bld", b))) break;
