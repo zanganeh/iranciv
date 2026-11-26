@@ -420,4 +420,7 @@ export function installGame(app) {
     endTurn: () => doEndTurn(), select, render,
     peoples: PEOPLES, dist: (a, b) => hexDist(board.grid, a, b), WIN,
   };
+
+  // The single-file build opens straight into the game (bundle-ext.js sets this).
+  if (globalThis.__IRANCIV_START__ === "game") app.setMode("game");
 }

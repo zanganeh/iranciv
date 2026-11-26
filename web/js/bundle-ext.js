@@ -2,4 +2,5 @@
 import * as layers from "./ext/layers/index.js";
 import * as game from "./ext/game/index.js";
 
+globalThis.__IRANCIV_START__ = "game"; // open on the game, not the data map
 globalThis.__IRANCIV_EXT__ = { "./layers/index.js": layers, "./game/index.js": game };
