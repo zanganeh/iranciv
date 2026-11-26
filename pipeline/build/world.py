@@ -462,6 +462,10 @@ def build() -> None:
             continue
         for k, codes in PCT.items():
             pct[k][i] = round(100 * sum(counts[c] for c in codes) / land)
+    for i in range(grid.size):  # shares are published for Iranian land only (cover stays for the map's look)
+        if owner[i] < 0:
+            for k in pct:
+                pct[k][i] = 0
     # Coastal hexes whose WorldCover pixels are all sea take their land neighbours' most common cover.
     filled = 0
     for _ in range(3):
@@ -498,7 +502,7 @@ def build() -> None:
                 continue  # a corner clipped down to nothing
             pts = simplify(piece, 4.0)
             if len(pts) >= 2:
-                rivers.append({"name": name, "rank": rank, "pts": [round(v, 1) for p in pts for v in p]})
+                rivers.append({"name": name, "rank": int(rank), "pts": [round(v, 1) for p in pts for v in p]})
 
     cover_table = [{"id": 0, "key": "none", "name": "None", "rule": "Water, or no WorldCover land pixels."}] + [
         {"id": cid, "key": key, "name": name, "color": color, "nlcd": codes, "rule": rule}

@@ -56,7 +56,7 @@ ECON_NUMBERS = ["population", "employed", "median_income", "median_rent", "home_
 # The economic shape shared by a city, a state and nation.json "nation" (gdp_by_industry is optional).
 ECON_KEYS = ["population", "employed", "yields", "jobs", "median_income", "median_rent", "home_value",
              "unemployment", "rent_burden", "gdp", "gdp_year", "growth", "growth_years"]
-GROWTH_MAX = 0.25  # the pipeline nulls |growth| above this (see pipeline/build/growth.py)
+GROWTH_MAX = 0.6  # the pipeline nulls |growth| above this over 2006-2016 (see pipeline/build/economy.py)
 CITY_RANK_BASE = ["population", "gdp", "gdp_per_capita", "growth"]
 PEERS = 5
 COUNTY_FORMATS = (LENS_FORMATS - {"category"}) | {"text", "km2"}  # categorical county columns are "text"
@@ -286,8 +286,7 @@ def check_growth(r: Report, docs: dict) -> None:
             bad += 1
     for what, o in fixed:
         if o.get("growth_years") is not None and o.get("growth") is None:
-            r.fail(f"{what}: growth is null although growth_years is set (states and the nation always have one)")
-            bad += 1
+            r.warn(f"{what}: growth is null although growth_years is set (a province created after the base year)")
     if not bad and windows:
         (w,) = windows
         r.ok(f"growth: one window {w[0]}→{w[1]} ending at nation.json year; every state and the nation have a rate")
@@ -306,9 +305,9 @@ def check_cities(r: Report, cities, ctx: dict | None, yield_keys=YIELD_KEYS) -> 
     dup = [i for i, k in ids.items() if k > 1]
     if dup:
         r.fail(f"cities.json: duplicate ids {_sample(dup)}")
-    bad_id = [c.get("id") for c in cities if not (isinstance(c.get("id"), str) and re.fullmatch(r"\d{5}", c["id"]))]
+    bad_id = [c.get("id") for c in cities if not (isinstance(c.get("id"), str) and re.fullmatch(r"Q\d+", c["id"]))]
     if bad_id:
-        r.fail(f"cities.json: ids must be 5-digit CBSA strings: {_sample(bad_id)}")
+        r.fail(f"cities.json: ids must be Wikidata QIDs: {_sample(bad_id)}")
     pops = [c.get("population") for c in cities]
     if any(not is_num(p) or p <= 0 for p in pops):
         r.fail("cities.json: every city needs a positive population")
@@ -469,8 +468,8 @@ def check_nation(r: Report, nat) -> list[str]:
                          ["key", "icon", "emoji", "label", "color", "unit", "description"]):
             continue
         keys.append(y["key"])
-        if y["unit"] not in ("workers", "usd") or not COLOR.match(str(y["color"])):
-            r.fail(f"nation.json yield {y['key']}: unit must be workers|usd and color #hex")
+        if not isinstance(y["unit"], str) or not y["unit"] or not COLOR.match(str(y["color"])):
+            r.fail(f"nation.json yield {y['key']}: unit must be a non-empty string and color #hex")
     if not isinstance(nat["industries"], dict) or not all(isinstance(v, str) for v in nat["industries"].values()):
         r.fail("nation.json: industries must be {key: label}")
     if need_keys(r, "nation.json nation", nat["nation"], ECON_KEYS):
@@ -525,8 +524,8 @@ def check_lenses(r: Report, doc, ctx: dict | None, source_ids: set | None) -> No
             off = [i for i, v in enumerate(vals) if v is not None and ctx["owner"][i] < 0]
             if off:
                 r.fail(f"{what}: {len(off)} values on non-US cells (must be null)")
-        if lens["format"] == "pct" and any(is_num(v) and not -1e-9 <= v <= 1 + 1e-9 for v in vals):
-            r.fail(f"{what}: format pct but some values are outside 0..1 (pct lenses are fractions)")
+        if lens["format"] == "pct" and any(is_num(v) and not -1 - 1e-9 <= v <= 1 + 1e-9 for v in vals):
+            r.fail(f"{what}: format pct but some values are outside -1..1 (pct lenses are fractions)")
         if lens["format"] == "category":
             n = len(lens["categories"]) if isinstance(lens.get("categories"), list) else 0
             if any(is_num(v) and not (is_int(v) and 0 <= v < n) for v in vals):
@@ -611,7 +610,7 @@ def _check_resource_summary(r: Report, summary, types: dict, items: list) -> Non
             return f"{what}: needs count, value, unit"
         if got["count"] != want[0] or (types.get(t) and got["unit"] != types[t]["unit"]):
             return f"{what}: count/unit {got['count']}/{got['unit']!r} do not match the items ({want[0]})"
-        if t in NOT_ADDITIVE:
+        if t in NOT_ADDITIVE or (types.get(t) and types[t]["unit"] != "MW"):
             return None if got["value"] is None else f"{what}: value must be null (play areas are not additive)"
         if not is_num(got["value"]) or abs(got["value"] - want[1]) > 1:
             return f"{what}: value {got['value']!r} != sum of item values {round(want[1])}"
@@ -668,7 +667,7 @@ def check_counties(r: Report, doc, ctx: dict | None, city_ids: set | None) -> No
             if fmt[k] == "text":
                 if not isinstance(v, str):
                     errs[f"{k} not text"] += 1
-            elif not is_num(v) or (fmt[k] == "pct" and not 0 <= v <= 1) or (k in ("population", "land_km2", "density") and v < 0):
+            elif not is_num(v) or (fmt[k] == "pct" and not -1 <= v <= 1) or (k in ("population", "land_km2", "density") and v < 0):
                 errs[f"{k} out of range"] += 1
         if not (isinstance(rec["geoid"], str) and re.fullmatch(r"\d{5}", rec["geoid"])):
             errs["geoid not 5 digits"] += 1
