@@ -60,6 +60,7 @@ async function main() {
     cities, lens: null, band: null, hoverCell: -1, selectedCity: null, selectedState: null, showResources: !!w.resources,
     highlight: null, // {cells?, cities?, states?, resources?, dimOthers?, color?} (render/overlays.js)
     resourceFilter: null, // {types?: Set<typeId>, minValue?: number}
+    bare: false, // app.setBare(true): terrain only (no provinces, city tiles, banners, resources, names), for the game
   };
   const states = Array.isArray(statesData) ? statesData : null;
   const lensById = new Map(lensFile.lenses.map((l) => [l.id, l]));
@@ -118,7 +119,7 @@ async function main() {
   }).join(";");
   const cacheKey = () =>
     `${state.lens?.id ?? "terrain"}|${state.band ? state.band.join(",") : ""}|${state.showResources ? 1 : 0}|${dpr}|${cam.w}x${cam.h}` +
-    `|${state.selectedCity?.id ?? ""}|${resourceFilterSig(state.resourceFilter)}|${layersSig()}`;
+    `|${state.selectedCity?.id ?? ""}|${resourceFilterSig(state.resourceFilter)}|${state.bare ? "bare" : ""}|${layersSig()}`;
 
   // lead: [-1|0|1, -1|0|1], the direction a pan ran off the cache; the new cache reaches further that way (and less
   // the other way, same size), so a steady pan re-renders less often.
@@ -140,7 +141,7 @@ async function main() {
     const hitsOut = {};
     drawStatic(cctx, vp, w, {
       lens: state.lens, showResources: state.showResources, resourceFilter: state.resourceFilter, selectedCity: state.selectedCity, hits: hitsOut,
-      layers: staticLayers, app,
+      layers: staticLayers, app, bare: state.bare,
     });
     cache.hits = { resources: hitsOut.resources || [] };
     cache.vp = vp;
@@ -191,7 +192,7 @@ async function main() {
       const vp = warm.jobs.shift();
       try {
         const t0 = performance.now();
-        mapRender.warmSprites(warm.ctx, vp, w, { lens: state.lens, selectedCity: state.selectedCity, layers: staticLayers, app });
+        mapRender.warmSprites(warm.ctx, vp, w, { lens: state.lens, selectedCity: state.selectedCity, layers: staticLayers, app, bare: state.bare });
         record(perf.warm, performance.now() - t0);
       } catch (err) {
         console.warn("sprite warm-up failed", err);
@@ -243,7 +244,7 @@ async function main() {
     // Plates of cities beside an open dock stay clear of it (desktop docks only; phones use a bottom sheet).
     const d = isMobile() ? null : dockState();
     state.bannerBounds = d && d.open ? { x0: d.l, x1: cam.w - d.r } : null;
-    hits = drawBanners(ctx, cam, w, state, nation.yields, nation);
+    hits = state.bare ? [] : drawBanners(ctx, cam, w, state, nation.yields, nation);
     if (overlays.length) drawOverlays(ctx, cam, overlays, app, { dpr, zMin: 100 });
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     minimap.draw();
@@ -870,7 +871,7 @@ async function main() {
   // The topmost registered static layer item under a screen point (css px): {layer, item} or null. Layers are asked
   // from the highest z down, only when drawn at the current zoom, with the pointer in world km.
   function hitLayer(mx, my) {
-    if (!staticLayers.length) return null;
+    if (!staticLayers.length || state.bare) return null;
     const Rpx = w.grid.R * cam.scale;
     let xy = null;
     for (let k = staticLayers.length - 1; k >= 0; k--) {
@@ -937,7 +938,7 @@ async function main() {
     }
     if (city) showCityTooltip(mx, my, city);
     else if (tip != null && tip !== "") showHtmlTooltip(mx, my, tip);
-    else if (cell >= 0) showCellTooltip(mx, my, w, cell, state.lens, state.showResources);
+    else if (cell >= 0 && !state.bare) showCellTooltip(mx, my, w, cell, state.lens, state.showResources);
     else hideTooltip();
     if (events.has("hover")) emitHover(cell, city || w.cityByCell.get(cell) || null, hitResource(mx, my), mx, my, lh);
   }
@@ -1010,7 +1011,7 @@ async function main() {
     const cell = cellAt(mx, my);
     const banner = hitCity(mx, my);
     const lh = banner ? null : hitLayer(mx, my); // a layer's site wins over the city tile under it, not its banner
-    const city = banner || w.cityByCell.get(cell);
+    const city = state.bare ? null : banner || w.cityByCell.get(cell);
     const owner = cell >= 0 ? w.raw.owner[cell] : -1;
     const resource = hitResource(mx, my);
     clearTimeout(pendingTap);
@@ -1199,6 +1200,7 @@ async function main() {
       return h ? { layer: h.layer.id, item: h.item } : null;
     },
     setHighlight(h) { state.highlight = h || null; requestDraw(); },
+    setBare(on) { state.bare = !!on; cache.key = null; requestDraw(); },
     highlightBounds: (h = state.highlight) => highlightBounds(w, h),
     setResourceFilter(f) { state.resourceFilter = f || null; requestDraw(); },
     setShowResources(on) {

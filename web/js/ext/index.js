@@ -3,8 +3,9 @@
 // console.info and skipped, so an extension can be left out without breaking the app. A failing install() is logged
 // as an error and does not stop the others. Modules are fetched in parallel and installed in list order.
 // layers/: static map layers (roads, rail, ports, forts, wonders, trade routes) and their toggles.
+// game/: the ancient 4X game ("Play" button), on the real terrain with invented peoples.
 // cityView and advisors read US-only data (ACS citizens, districts, advisors' Census tables); off until ported.
-const MODULES = ["./layers/index.js"];
+const MODULES = ["./layers/index.js", "./game/index.js"];
 
 export async function installExtensions(app, list = MODULES) {
   const loads = list.map((spec) => import(spec).then((m) => ({ m }), (err) => ({ err })));
